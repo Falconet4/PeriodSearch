@@ -1,0 +1,29 @@
+name: syntax
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  syntax:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Shell syntax
+        run: |
+          sh -n hip/build-hip.sh
+          bash -n hip/benchmark/run-tasks.sh
+
+      - name: Python syntax
+        run: |
+          python3 -m py_compile hip/benchmark/score_vs_reference.py
+          python3 -m py_compile hip/patch_timer_stack.py
+
+      - name: Benchmark counts
+        run: |
+          test "$(ls hip/benchmark/inputs | wc -l)" -eq 54
+          test "$(ls hip/benchmark/outputs/fp64 | wc -l)" -eq 54
+          test "$(ls hip/benchmark/outputs/k40 | wc -l)" -eq 54
+          test "$(ls hip/benchmark/outputs/opencl-10222 | wc -l)" -eq 54
+          test "$(tail -n +2 hip/benchmark/TASKS.tsv | wc -l)" -eq 54

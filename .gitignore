@@ -116,3 +116,11 @@ period_search_in*
 !*/input_period_search/period_search_in_*
 period_search_out*
 period_search_state*
+# HIP port build outputs (binaries are published as release assets)
+/hip/build/
+/hip/period_search_hip
+/hip/period_search_hip_*
+/hip/*.o
+/hip/benchmark/work/
+# the incoming-workunit rule above must not hide the benchmark inputs
+!/hip/benchmark/inputs/ps_*_input*
