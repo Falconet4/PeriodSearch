@@ -8,11 +8,9 @@ unchanged at the repository root.
 
 **Tested platform (the only one tested):** Linux Mint 22.3, kernel 7.0.0-42, ROCm 10.1.0 /
 HIP 7.16.26385, on an AMD RX 9060 XT OC 16 GB (gfx1200, RDNA4). No other operating system,
-kernel, ROCm version or GPU was tested. The single-architecture builds contain gfx1200 code only;
-the optional multiarch pair carries gfx1200 + gfx1100 + gfx1030 code, but only the gfx1200 part
-has ever been tuned and executed.
+kernel, ROCm version or GPU was tested.
 
-**Version:** `v1.0.0-hip`. The measurements use BOINC application version 10231.
+**Version:** `v1.0.0-hip`.
 
 ## What is here
 
