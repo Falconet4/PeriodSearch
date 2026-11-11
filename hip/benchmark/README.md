@@ -1,7 +1,7 @@
 # Benchmark set - 54 workunits
 
-Real BOINC workunits issued by Asteroids@home, kept under their original names, plus the outputs
-of the two builds in this repository and of the OpenCL 10222 reference.
+Real BOINC production workunits issued by Asteroids@home, kept under their original names, plus
+the outputs of the two builds in this repository and of the OpenCL 10222 reference.
 
 ## Layout
 
@@ -72,7 +72,8 @@ Any failing line rejects the pair. Pole agreement (3-D great-circle angle betwee
 ## Timings
 
 `TIMES.tsv` gives the wall clock of all 54 workunits for the two builds here and for the OpenCL
-10222 reference. Totals: FP64 7,016.6 s, K=40 6,072.2 s, OpenCL 10222 11,575.1 s.
+10222 reference. Totals: FP64 7,016.6 s, K=40 6,072.2 s, OpenCL 10222 11,575.1 s. FP64 is
+1.65x faster than 10222 (39 % less wall clock); K=40 is 1.91x faster (47.5 % less).
 
 Conditions: standalone harness (`PS_STANDALONE=1`), one task per process, with 24 BOINC CPU tasks
 running on the host; RX 9060 XT (gfx1200), Linux Mint 22.3, kernel 7.0.0-42, ROCm 10.1.0. The

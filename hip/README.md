@@ -35,9 +35,9 @@ Every workunit passes under either reading.
 
 ## Accuracy
 
-Measured over the 54 workunits in `benchmark/` (234,532 solution rows). The reference is the
-OpenCL 10222 outputs in `benchmark/outputs/opencl-10222/`; the K=40 comparison is against
-this port's FP64 build.
+Measured over the 54 real BOINC production workunits in `benchmark/` (234,532 solution rows).
+The reference is the OpenCL 10222 outputs in `benchmark/outputs/opencl-10222/`; the K=40
+comparison is against this port's FP64 build.
 
 | comparison | rows | exact lines | poles <= 5 deg | poles <= 1 deg |
 |---|---:|---:|---:|---:|
@@ -71,6 +71,7 @@ Wall clock on the reference machine, one task per process, standalone harness, s
 | `period_search_hip_K40` | 6,072.2 s |
 | OpenCL 10222 (reference outputs) | 11,575.1 s |
 
+FP64 is 1.65x faster than 10222 (39 % less wall clock); K=40 is 1.91x faster (47.5 % less).
 These are single-workunit times, not BOINC throughput; the client adds its own scheduling
 overhead. Per-task values for all three builds are in `benchmark/TIMES.tsv`.
 
@@ -128,7 +129,7 @@ hip/
   src/                     full source; HIP headers are vendored under src/include/hip
   build-hip.sh             builds FP64 and K=40 (and optionally the multiarch pair)
   patch_timer_stack.py     raises BOINC's 32 KB timer-thread stack to 1 MB
-  benchmark/               54 workunit inputs, outputs and timings; see benchmark/README.md
+  benchmark/               54 BOINC production workunits, outputs and timings; see benchmark/README.md
   docs/                    design and measurement notes
   ATTRIBUTION.md
 ```
@@ -139,8 +140,9 @@ directions that were measured and rejected, and the measurement practice.
 ## Attribution
 
 This port is based on the upstream Asteroids@home `PeriodSearch` source. It also incorporates
-ideas from IanSteveC's HIP/CUDA port, in particular the warp-cooperative Curve1 search and the
-folded `Dg`/`gfac` formulation. See `ATTRIBUTION.md` for details and links.
+ideas from [IanSteveC's HIP/CUDA port](https://github.com/IanSteveC/PeriodSearch), in particular
+the warp-cooperative Curve1 search and the folded `Dg`/`gfac` formulation. See `ATTRIBUTION.md`
+for details and links.
 
 The port was developed with AI assistance (DeepSeek V4.1 Flash).
 
