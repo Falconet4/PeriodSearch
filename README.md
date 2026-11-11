@@ -11,8 +11,8 @@ unchanged at the repository root.
 - Linux Mint 22.3, kernel 7.0.0-42, ROCm 10.1.0 / HIP 7.16.26385, AMD RX 9060 XT OC 16 GB
   (gfx1200, RDNA4): all measurements, accuracy figures and timings in this repository.
 - Windows 10 x64, AMD HIP SDK 7.2, same gfx1200 GPU: the application was built and run on a few
-  workunits and produced the same output as the Linux FP64 build after line-ending normalisation.
-  The Windows build files are not part of this source-only tree.
+  workunits and produced the same output lines as the Linux FP64 build after converting the
+  Windows CRLF line endings to LF. The Windows build files are not part of this source-only tree.
 
 No other operating system, kernel, ROCm version or GPU was tested.
 
