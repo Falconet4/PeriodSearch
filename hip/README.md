@@ -15,14 +15,13 @@ gfx1100 and gfx1030; only the gfx1200 code has been executed or measured.
 
 **Tested platforms:**
 
-- Linux Mint 22.3 (kernel 7.0.0-42), ROCm 10.1.0 / HIP 7.16.26385, AMD Radeon RX 9060 XT 16 GB
+- Linux Mint 22.3 (kernel 7.0.0-42), ROCm 10.1.0 / HIP 7.16.26385, AMD RX 9060 XT OC 16 GB
   (gfx1200, RDNA4): all measurements in this repository.
 - Windows 11 x64, AMD HIP SDK 7.2, same gfx1200 GPU: built and run on a few workunits; output
   matched the Linux FP64 build after CRLF normalisation. The Windows build files are not included
   in this repository.
 
-No other operating system, kernel, ROCm version or GPU was tested. The measurements use BOINC
-application version 10231.
+No other operating system, kernel, ROCm version or GPU was tested.
 
 ## Validator tolerances
 

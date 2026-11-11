@@ -76,6 +76,6 @@ Any failing line rejects the pair. Pole agreement (3-D great-circle angle betwee
 1.65x faster than 10222 (39 % less wall clock); K=40 is 1.91x faster (47.5 % less).
 
 Conditions: standalone harness (`PS_STANDALONE=1`), one task per process, with 24 BOINC CPU tasks
-running on the host; RX 9060 XT (gfx1200), Linux Mint 22.3, kernel 7.0.0-42, ROCm 10.1.0. The
+running on the host; AMD RX 9060 XT OC 16 GB (gfx1200), Linux Mint 22.3, kernel 7.0.0-42, ROCm 10.1.0. The
 FP64 and K=40 columns are the two builds in this repository. A standalone run carries about 2 s
 of BOINC teardown, so compare builds rather than absolute times on short tasks.

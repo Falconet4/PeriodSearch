@@ -1,5 +1,5 @@
 # Wall-clock seconds per workunit, standalone harness (PS_STANDALONE=1), one task per
-# process, 24 BOINC CPU tasks running on the host. RX 9060 XT (gfx1200), Linux Mint 22.3,
+# process, 24 BOINC CPU tasks running on the host. AMD RX 9060 XT OC 16 GB (gfx1200), Linux Mint 22.3,
 # kernel 7.0.0-42, ROCm 10.1.0.
 # FP64 = the FP64 build; K=40 = the K=40 build;
 # opencl_10222 = Ahorek 10222 OpenCL build.

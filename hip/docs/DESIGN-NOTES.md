@@ -6,7 +6,7 @@ a build guide or a changelog.
 
 ## Platform and cost model
 
-- gfx1200 (RX 9060 XT, RDNA4), ROCm 10.1.0, FP64 scalar, 128-thread blocks, one context per block.
+- gfx1200 (AMD RX 9060 XT OC 16 GB, RDNA4), ROCm 10.1.0, FP64 scalar, 128-thread blocks, one context per block.
 - A degree-6 model gives `n_coef = 49`, `ma = 57`, `mfit = 55`. The normal equations are
   55x55 (row stride 56) and the solve is 55 dependent pivot steps.
 - Reference kernel split on a short-curve workunit (rocprofv3): Curve1 warp kernel 69.0 %,
