@@ -13,15 +13,16 @@ This port is derived from that source. Copyright and license terms are unchanged
 
 ## IanSteveC's PeriodSearch
 
-The warp-cooperative Curve1 formulation (`src/curve1_warp.h`, selected by `PS_WARP=1`) follows
-the approach used in IanSteveC's independent port:
+The base warp-cooperative search and the dedicated warp-only Curve1 kernels
+(`src/curve1_warp.h`, selected by `PS_WARP=1`) came from IanSteveC's independent port:
 
 - https://github.com/IanSteveC/PeriodSearch
 
-Two specific ideas are acknowledged:
+The specific contributions acknowledged are:
 
-- **Warp-cooperative Curve1 search** — lane = facet, shared compaction of visible facets,
-  column-owned coefficient accumulation, butterfly reduction (`mrqcof_curve1_opt`).
+- **Warp-cooperative Curve1 search** — the base formulation (`mrqcof_curve1_opt`) and the
+  dedicated warp-only kernel structure (`...Curve1Tw`): lane = facet, shared compaction of
+  visible facets, column-owned coefficient accumulation, butterfly reduction.
 - **Folded `Dg` (`Dgfold`)** — the per-block `Dg` matrix is not materialised; the per-facet
   factor is folded into `gfac`/the geometry pass.
 

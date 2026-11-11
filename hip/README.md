@@ -168,8 +168,8 @@ directions that were measured and rejected, and the measurement practice.
 
 This port is based on the upstream Asteroids@home `PeriodSearch` source. It also incorporates
 ideas from [IanSteveC's HIP/CUDA port](https://github.com/IanSteveC/PeriodSearch), in particular
-the warp-cooperative Curve1 search and the folded `Dg`/`gfac` formulation. See `ATTRIBUTION.md`
-for details and links.
+the base warp-cooperative search, the dedicated warp-only Curve1 kernels, and the folded
+`Dg`/`gfac` formulation. See `ATTRIBUTION.md` for details and links.
 
 The port was developed with AI assistance (DeepSeek V4.1 Flash).
 

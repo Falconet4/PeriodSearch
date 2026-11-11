@@ -52,8 +52,8 @@ Requirements and deployment details are in [`hip/README.md`](hip/README.md).
 The fork is distributed under the same terms as the upstream
 [Asteroids@home PeriodSearch](https://github.com/AsteroidsAtHome/PeriodSearch) repository; see
 `LICENSE` and `COPYRIGHT`. It incorporates ideas from
-[IanSteveC's HIP/CUDA port](https://github.com/IanSteveC/PeriodSearch) (the warp-cooperative
-Curve1 search and the folded `Dg`/`gfac` formulation); see
+[IanSteveC's HIP/CUDA port](https://github.com/IanSteveC/PeriodSearch) (the base warp-cooperative
+search and dedicated warp-only Curve1 kernels, and the folded `Dg`/`gfac` formulation); see
 [`hip/ATTRIBUTION.md`](hip/ATTRIBUTION.md). The port was developed with AI assistance
 (DeepSeek V4.1 Flash).
 
