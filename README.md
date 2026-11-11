@@ -10,7 +10,7 @@ unchanged at the repository root.
 
 - Linux Mint 22.3, kernel 7.0.0-42, ROCm 10.1.0 / HIP 7.16.26385, AMD RX 9060 XT OC 16 GB
   (gfx1200, RDNA4): all measurements, accuracy figures and timings in this repository.
-- Windows 11 x64, AMD HIP SDK 7.2, same gfx1200 GPU: the application was built and run on a few
+- Windows 10 x64, AMD HIP SDK 7.2, same gfx1200 GPU: the application was built and run on a few
   workunits and produced the same output as the Linux FP64 build after line-ending normalisation.
   The Windows build files are not part of this source-only tree.
 
@@ -29,7 +29,7 @@ No other operating system, kernel, ROCm version or GPU was tested.
 - [`hip/ATTRIBUTION.md`](hip/ATTRIBUTION.md) — upstream and IanSteveC credits, vendored HIP
   headers.
 
-## Headline
+## Results
 
 Over the 54 real BOINC production workunits (234,532 solution rows), FP64 matches the
 [OpenCL 10222 reference](https://github.com/ahorek/asteroids_prerelease/releases/tag/10222) on
@@ -51,7 +51,7 @@ cd hip
 
 Requirements and deployment details are in [`hip/README.md`](hip/README.md).
 
-## License and attribution
+## License, attribution, acknowledgements
 
 The fork is distributed under the same terms as the upstream
 [Asteroids@home PeriodSearch](https://github.com/AsteroidsAtHome/PeriodSearch) repository; see
