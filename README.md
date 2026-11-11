@@ -6,9 +6,15 @@ unchanged at the repository root.
 
 **Status:** source only. No prebuilt binaries are distributed; build them from `hip/src`.
 
-**Tested platform (the only one tested):** Linux Mint 22.3, kernel 7.0.0-42, ROCm 10.1.0 /
-HIP 7.16.26385, on an AMD RX 9060 XT OC 16 GB (gfx1200, RDNA4). No other operating system,
-kernel, ROCm version or GPU was tested.
+**Tested platforms:**
+
+- Linux Mint 22.3, kernel 7.0.0-42, ROCm 10.1.0 / HIP 7.16.26385, AMD RX 9060 XT OC 16 GB
+  (gfx1200, RDNA4): all measurements, accuracy figures and timings in this repository.
+- Windows 11 x64, AMD HIP SDK 7.2, same gfx1200 GPU: the application was built and run on a few
+  workunits and produced the same output as the Linux FP64 build after line-ending normalisation.
+  The Windows build files are not part of this source-only tree.
+
+No other operating system, kernel, ROCm version or GPU was tested.
 
 **Version:** `v1.0.0-hip`.
 
@@ -31,7 +37,7 @@ Over the 54 real BOINC production workunits (234,532 solution rows), FP64 matche
 workunit passes the project validator with at least 15x margin on rms and 39x on chi-square. K=40
 trades line exactness for speed and stays inside the same allowances.
 
-Wall clock on the tested machine: FP64 7,016.6 s, K=40 6,072.2 s, OpenCL 10222 11,575.1 s —
+Wall clock on the Linux test machine: FP64 7,016.6 s, K=40 6,072.2 s, OpenCL 10222 11,575.1 s —
 1.65x faster for FP64 (39 % less wall clock) and 1.91x for K=40 (47.5 % less).
 Per-task values are in [`hip/benchmark/TIMES.tsv`](hip/benchmark/TIMES.tsv).
 

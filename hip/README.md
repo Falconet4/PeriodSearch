@@ -13,9 +13,16 @@ Either default can be overridden at runtime (`PS_FP32_TAIL=0|40`), so one binary
 other. `build-hip.sh all` additionally builds a multi-architecture pair carrying gfx1200,
 gfx1100 and gfx1030; only the gfx1200 code has been executed or measured.
 
-**Tested only on** Linux Mint 22.3 (kernel 7.0.0-42), ROCm 10.1.0 / HIP 7.16.26385, on an AMD
-Radeon RX 9060 XT 16 GB (gfx1200, RDNA4). No other operating system, kernel, ROCm version or GPU
-was tested. The measurements use BOINC application version 10231.
+**Tested platforms:**
+
+- Linux Mint 22.3 (kernel 7.0.0-42), ROCm 10.1.0 / HIP 7.16.26385, AMD Radeon RX 9060 XT 16 GB
+  (gfx1200, RDNA4): all measurements in this repository.
+- Windows 11 x64, AMD HIP SDK 7.2, same gfx1200 GPU: built and run on a few workunits; output
+  matched the Linux FP64 build after CRLF normalisation. The Windows build files are not included
+  in this repository.
+
+No other operating system, kernel, ROCm version or GPU was tested. The measurements use BOINC
+application version 10231.
 
 ## Validator tolerances
 
@@ -63,7 +70,8 @@ reference and does not move the worst case.
 
 ## Performance
 
-Wall clock on the reference machine, one task per process, standalone harness, same 54 workunits:
+Wall clock on the Linux reference machine, one task per process, standalone harness, same 54
+workunits:
 
 | build | total |
 |---|---:|
