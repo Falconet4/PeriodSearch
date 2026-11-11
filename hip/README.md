@@ -136,6 +136,7 @@ in rough code order:
 - Optional FP32 tail beyond `PS_FP32_TAIL`; the FP64 prefix is unchanged.
 - BOINC 7.24 workaround: `patch_timer_stack.py` raises the timer-thread stack to 1 MB.
 - Standalone harness (`PS_STANDALONE=1`) and the 54-workunit benchmark set.
+- LM completion poll batched to every fifth iteration.
 - Curve2 shared-memory tiling with a work-balanced triangular mapping.
 - Curve2 2x2 register-blocked alpha update; shared-memory reductions in the solve.
 - Warp-cooperative pivot search; pivot row staged in shared memory; one barrier merged per step; dead L store dropped.
