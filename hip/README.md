@@ -122,6 +122,32 @@ every queued task fails without launching.
 `PS_FP32_TAIL` cannot be set from `app_info.xml`, so deploy the binary whose compiled-in default
 you want.
 
+## Changes vs upstream
+
+The port is a CUDA-to-HIP conversion of the upstream `period_search` source. The adopted changes,
+in rough code order:
+
+- Single device translation unit: all device code compiled as one HIP TU, no `-fgpu-rdc`.
+- No materialised `Dg` matrix: the per-block buffer is gone and the per-facet factor is folded into `gfac`.
+- Fused per-point geometry: matrix, phase function and brightness/derivatives in one pass.
+- Warp-cooperative Curve1T (`PS_WARP=1`): lane = facet, shared compaction, column-owned accumulation, butterfly reduction.
+- Dedicated warp-only Curve1 kernels (`...Curve1Tw`); the older path remains behind `PS_WARP=0`.
+- Build flags: `-O3 -ffp-contract=fast -mcumode`, `-mllvm -amdgpu-stress-vgpr=208`.
+- Optional FP32 tail beyond `PS_FP32_TAIL`; the FP64 prefix is unchanged.
+- BOINC 7.24 workaround: `patch_timer_stack.py` raises the timer-thread stack to 1 MB.
+- Standalone harness (`PS_STANDALONE=1`) and the 54-workunit benchmark set.
+- Curve2 shared-memory tiling with a work-balanced triangular mapping.
+- Curve2 2x2 register-blocked alpha update; shared-memory reductions in the solve.
+- Warp-cooperative pivot search; pivot row staged in shared memory; one barrier merged per step; dead L store dropped.
+- Flattened `mrqmin_2_end` copies and `mrqcof_end` symmetrisation; parallel `atry` update.
+- Curve1Last specialised for the three-point constraint curve, four points per pass, 64 threads.
+- Linear zeroing in `mrqcof_start`; 16-byte-aligned geometry staging.
+- Curve points spread evenly over the warps; one point per Curve1 pass instead of A/B pairing.
+- Per-lightcurve point limit raised from 2,000 to 20,000; Curve2 tile guard at `ma <= 66`.
+- `Areaf` removed (the FP32 tail casts `Area` on the fly); dead `freq_context` members removed.
+- Host side: 13 of 14 host source files are byte-identical to upstream; only `period_search_BOINC.cpp` changed.
+- `PS_K_DEFAULT` build flag: FP64 and K=40 from one source.
+
 ## Repository layout
 
 ```

@@ -16,7 +16,8 @@ has ever been executed.
 
 ## What is here
 
-- [`hip/README.md`](hip/README.md) — build, run, deploy, accuracy and the two build targets.
+- [`hip/README.md`](hip/README.md) — build, run, deploy, accuracy, the change list and the two
+  build targets.
 - [`hip/benchmark/`](hip/benchmark/README.md) — 54 real BOINC production workunits; outputs for
   FP64, K=40 and OpenCL 10222; `TASKS.tsv`, `TIMES.tsv`, runner and scoring script.
 - [`hip/docs/DESIGN-NOTES.md`](hip/docs/DESIGN-NOTES.md) — cost model, adopted changes, rejected
