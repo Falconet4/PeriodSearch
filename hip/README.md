@@ -141,7 +141,8 @@ in rough code order:
 - Dedicated warp-only Curve1 kernels (`...Curve1Tw`); the older path remains behind `PS_WARP=0`.
 - Build flags: `-O3 -ffp-contract=fast -mcumode`, `-mllvm -amdgpu-stress-vgpr=208`.
 - Optional FP32 tail beyond `PS_FP32_TAIL`; the FP64 prefix is unchanged.
-- BOINC 7.24 workaround: `patch_timer_stack.py` raises the timer-thread stack to 1 MB.
+- BOINC timer-stack workaround: `patch_timer_stack.py` raises the 7.24 32 KB / 8.3 64 KB
+  timer-thread stack to 1 MB.
 - Standalone harness (`PS_STANDALONE=1`) and the 54-workunit benchmark set.
 - LM completion poll batched to every fifth iteration.
 - Curve2 shared-memory tiling with a work-balanced triangular mapping.
@@ -156,13 +157,34 @@ in rough code order:
 - Host side: 13 of 14 host source files are byte-identical to upstream; only `period_search_BOINC.cpp` changed.
 - `PS_K_DEFAULT` build flag: FP64 and K=40 from one source.
 
+### Robustness pass (2026-11-19)
+
+A numerically neutral hardening pass followed the optimisation work:
+
+- Checked every header and observation read; bounded lightcurve counts and weight indices,
+  period/time/step, `l_max`/`m_max`, `nrows` (facet budget), `conw`, `stopCondition`, `cl`,
+  `a_lamda_incr`, and checkpoint line counts.
+- Padded the observation arrays for the three synthetic constraint points; `max_l_points`
+  includes the synthetic curve.
+- Checked every HIP allocation, copy, sync and result transfer; allocation failure is fatal;
+  pinned buffers are freed with the matching allocator.
+- Copy exactly six `freq_context` pointers (the dead `paf` array is gone).
+- Derived sync masks, lane mapping and Gauss pivot geometry from the compiled wave size; wave64
+  falls back to the per-thread Curve1 path.
+- Consolidated the duplicated host setup and Curve1 bookkeeping.
+- `patch_timer_stack.py` also handles BOINC 8.3's 64 KB timer stack.
+
+The reference outputs are byte-identical on all 54 workunits. The device code was verified against
+a fresh compile of this tree: every embedded code object's `.text`, `.rodata` and `.data.rel.ro`
+sections match, with only the path-dependent `__hip_cuid` symbol tables differing.
+
 ## Repository layout
 
 ```
 hip/
   src/                     full source; HIP headers are vendored under src/include/hip
   build-hip.sh             builds FP64 and K=40 (and optionally the multiarch pair)
-  patch_timer_stack.py     raises BOINC's 32 KB timer-thread stack to 1 MB
+  patch_timer_stack.py     raises BOINC's 32 KB (7.24) / 64 KB (8.3) timer-thread stack to 1 MB
   benchmark/               54 BOINC production workunits, outputs and timings; see benchmark/README.md
   docs/                    design and measurement notes
   ATTRIBUTION.md

@@ -80,3 +80,12 @@ a build guide or a changelog.
 - Curve2: about 13 % of a point-heavy workunit, and staging-bound.
 - The solve: 11.9 % of a short-curve workunit and 4.7 % of a long one; barrier- and
   serialisation-bound.
+
+## Robustness pass (2026-11-19)
+
+A numerically neutral hardening pass followed the performance work: file-driven indices and
+parameters are bounded, every HIP API call and allocation is checked, the observation arrays are
+padded for the synthetic constraint points, the wave-level code derives its masks and pivot
+geometry from the compiled wave size (per-thread Curve1 fallback on wave64), and duplicated host
+and Curve1 bookkeeping was consolidated. The reference outputs are unchanged on all 54 workunits;
+the rebuilt device code was verified section-by-section against a fresh compile of the tree.
