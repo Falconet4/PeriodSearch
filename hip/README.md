@@ -85,7 +85,10 @@ overhead. Per-task values for all three builds are in `benchmark/TIMES.tsv`.
 ## Requirements
 
 - ROCm/HIP with `hipcc` (built and measured with ROCm 10.1.0).
-- BOINC API headers, expected at `/usr/include/boinc` (e.g. `boinc-dev`).
+- **BOINC API 7.24.x** headers and static libraries (e.g. `boinc-dev` 7.24.1), by default at
+  `/usr/include/boinc` and `/usr/lib/x86_64-linux-gnu`. The build refuses known newer releases;
+  override the paths with `BOINC_INCLUDE` and `BOINC_LIBDIR`, or set `BOINC_ALLOW_NEWER=1` for an
+  experimental build.
 - `python3` (used by `patch_timer_stack.py`).
 - A gfx1200 GPU for the single-architecture builds.
 
@@ -100,6 +103,9 @@ BRP_ARCHS=gfx1030 ./build-hip.sh fp64
 Targets: `fp64`, `k40`, `multiarch`, `multiarch-k40`, `all`.
 
 All device code is compiled as one translation unit and linked with the BOINC client libraries.
+The build targets **BOINC API 7.24.x**; `BOINC_INCLUDE` and `BOINC_LIBDIR` select another 7.24
+installation. The source uses only APIs present in 7.24.1; the newer-release additions (sporadic
+apps, the extra `APP_INIT_DATA` fields, the changed network calls) are not used.
 No prebuilt binary is distributed; the measurement figures describe the two builds defined by
 this source. The link line in `build-hip.sh` assumes the tested Mint/Ubuntu library layout
 (`libcurl.so.4`, `libssl.so.3`, `-L/usr/lib/x86_64-linux-gnu`); adjust it for other distributions.
@@ -141,8 +147,8 @@ in rough code order:
 - Dedicated warp-only Curve1 kernels (`...Curve1Tw`); the older path remains behind `PS_WARP=0`.
 - Build flags: `-O3 -ffp-contract=fast -mcumode`, `-mllvm -amdgpu-stress-vgpr=208`.
 - Optional FP32 tail beyond `PS_FP32_TAIL`; the FP64 prefix is unchanged.
-- BOINC timer-stack workaround: `patch_timer_stack.py` raises the 7.24 32 KB / 8.3 64 KB
-  timer-thread stack to 1 MB.
+- BOINC timer-stack workaround: `patch_timer_stack.py` raises the timer-thread stack to 1 MB.
+  It recognises both 7.24's 32 KB and 8.3's 64 KB patterns; the tree itself targets 7.24.
 - Standalone harness (`PS_STANDALONE=1`) and the 54-workunit benchmark set.
 - LM completion poll batched to every fifth iteration.
 - Curve2 shared-memory tiling with a work-balanced triangular mapping.
@@ -184,7 +190,7 @@ sections match, with only the path-dependent `__hip_cuid` symbol tables differin
 hip/
   src/                     full source; HIP headers are vendored under src/include/hip
   build-hip.sh             builds FP64 and K=40 (and optionally the multiarch pair)
-  patch_timer_stack.py     raises BOINC's 32 KB (7.24) / 64 KB (8.3) timer-thread stack to 1 MB
+  patch_timer_stack.py     raises BOINC's timer-thread stack to 1 MB (7.24 32 KB / 8.3 64 KB)
   benchmark/               54 BOINC production workunits, outputs and timings; see benchmark/README.md
   docs/                    design and measurement notes
   ATTRIBUTION.md

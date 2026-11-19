@@ -89,3 +89,5 @@ padded for the synthetic constraint points, the wave-level code derives its mask
 geometry from the compiled wave size (per-thread Curve1 fallback on wave64), and duplicated host
 and Curve1 bookkeeping was consolidated. The reference outputs are unchanged on all 54 workunits;
 the rebuilt device code was verified section-by-section against a fresh compile of the tree.
+`patch_timer_stack.py` also recognises BOINC 8.3's 64 KB timer stack, though the tree targets
+BOINC 7.24.
