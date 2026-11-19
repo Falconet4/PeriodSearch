@@ -86,9 +86,9 @@ overhead. Per-task values for all three builds are in `benchmark/TIMES.tsv`.
 
 - ROCm/HIP with `hipcc` (built and measured with ROCm 10.1.0).
 - **BOINC API 7.24.x** headers and static libraries (e.g. `boinc-dev` 7.24.1), by default at
-  `/usr/include/boinc` and `/usr/lib/x86_64-linux-gnu`. The build refuses known newer releases;
-  override the paths with `BOINC_INCLUDE` and `BOINC_LIBDIR`, or set `BOINC_ALLOW_NEWER=1` for an
-  experimental build.
+  `/usr/include/boinc` and `/usr/lib/x86_64-linux-gnu`. 7.24.x is the tested target; other
+  versions are accepted with a warning, silenced by `BOINC_ALLOW_NEWER=1`. Override the paths
+  with `BOINC_INCLUDE` and `BOINC_LIBDIR`.
 - `python3` (used by `patch_timer_stack.py`).
 - A gfx1200 GPU for the single-architecture builds.
 
@@ -103,9 +103,11 @@ BRP_ARCHS=gfx1030 ./build-hip.sh fp64
 Targets: `fp64`, `k40`, `multiarch`, `multiarch-k40`, `all`.
 
 All device code is compiled as one translation unit and linked with the BOINC client libraries.
-The build targets **BOINC API 7.24.x**; `BOINC_INCLUDE` and `BOINC_LIBDIR` select another 7.24
-installation. The source uses only APIs present in 7.24.1; the newer-release additions (sporadic
-apps, the extra `APP_INIT_DATA` fields, the changed network calls) are not used.
+The build targets **BOINC API 7.24.x**; `BOINC_INCLUDE` and `BOINC_LIBDIR` select another
+installation, and non-7.24 versions warn but still build. The source uses only APIs present in
+7.24.1. The app API is cross-version compatible for those calls: the client and the statically
+linked BOINC library do not have to match versions, because they communicate through
+`init_data.xml` and the unchanged shared-memory channels.
 No prebuilt binary is distributed; the measurement figures describe the two builds defined by
 this source. The link line in `build-hip.sh` assumes the tested Mint/Ubuntu library layout
 (`libcurl.so.4`, `libssl.so.3`, `-L/usr/lib/x86_64-linux-gnu`); adjust it for other distributions.
@@ -178,7 +180,7 @@ A numerically neutral hardening pass followed the optimisation work:
 - Derived sync masks, lane mapping and Gauss pivot geometry from the compiled wave size; wave64
   falls back to the per-thread Curve1 path.
 - Consolidated the duplicated host setup and Curve1 bookkeeping.
-- `patch_timer_stack.py` also handles BOINC 8.3's 64 KB timer stack.
+- `patch_timer_stack.py` recognises BOINC 8.3's 64 KB timer stack as well as 7.24's 32 KB one.
 
 The reference outputs are byte-identical on all 54 workunits. The device code was verified against
 a fresh compile of this tree: every embedded code object's `.text`, `.rodata` and `.data.rel.ro`

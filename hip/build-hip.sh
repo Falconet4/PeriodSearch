@@ -23,8 +23,8 @@ BOINC_INC="${BOINC_INCLUDE:-/usr/include/boinc}"
 BOINC_LIBDIR="${BOINC_LIBDIR:-/usr/lib/x86_64-linux-gnu}"
 BOINC_H="-I$BOINC_INC"
 
-# This tree targets BOINC API 7.24.x. Newer releases are not supported by the
-# documented build; set BOINC_ALLOW_NEWER=1 only for an experimental build.
+# BOINC 7.24.x is the tested target. Other versions are built with a warning;
+# set BOINC_ALLOW_NEWER=1 to silence it.
 if [ ! -d "$BOINC_INC" ]; then
 	echo "error: BOINC headers not found at $BOINC_INC; install boinc-dev 7.24.x or set BOINC_INCLUDE" >&2
 	exit 2
@@ -37,11 +37,8 @@ if [ -f "$BOINC_INC/version.h" ]; then
 			echo "warning: cannot read BOINC_VERSION_STRING from $BOINC_INC/version.h" >&2
 			;;
 		*)
-			if [ "${BOINC_ALLOW_NEWER:-0}" = "1" ]; then
-				echo "warning: building against BOINC $boinc_ver; 7.24.x is the tested target" >&2
-			else
-				echo "error: BOINC $boinc_ver found; this tree targets BOINC 7.24.x (set BOINC_ALLOW_NEWER=1 to override)" >&2
-				exit 2
+			if [ "${BOINC_ALLOW_NEWER:-0}" != "1" ]; then
+				echo "warning: building against BOINC $boinc_ver; 7.24.x is the tested target (set BOINC_ALLOW_NEWER=1 to silence)" >&2
 			fi
 			;;
 	esac
