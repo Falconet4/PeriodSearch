@@ -145,7 +145,7 @@ __device__ void ps_brightT_warp(freq_context *CUDA_LCC, double cg[], int Inrel, 
       remainder all landed on the last warp and the block ran one partial round for
       every point count that is not a multiple of nwarps*chunk.  Here the shares
       differ by at most one point, and each warp walks its own contiguous range. */
-   const int nwarps = (int)(blockDim.x >> 5);
+   const int nwarps = (int)(blockDim.x / warpSize);
    const int wbase  = Lpoints / nwarps;
    const int wrem   = Lpoints % nwarps;
    const int wcount = wbase + ((wid < wrem) ? 1 : 0);
@@ -197,7 +197,7 @@ __device__ void ps_brightT_warp(freq_context *CUDA_LCC, double cg[], int Inrel, 
                }
             }
 
-            const unsigned long long vis = __ballot_sync(0xffffffffffffffffULL, (dbrA != 0.0) || (dbrB != 0.0));
+            const unsigned long long vis = __ballot_sync(0xffffffffULL, (dbrA != 0.0) || (dbrB != 0.0));
             const int cnt = (int)__popcll(vis);
             if (dbrA != 0.0 || dbrB != 0.0)
             {
@@ -228,18 +228,18 @@ __device__ void ps_brightT_warp(freq_context *CUDA_LCC, double cg[], int Inrel, 
          #pragma unroll
          for (int off = 16; off > 0; off >>= 1)
          {
-            brA += __shfl_xor_sync(0xffffffffffffffffULL, brA, off);
-            t1A += __shfl_xor_sync(0xffffffffffffffffULL, t1A, off);
-            t2A += __shfl_xor_sync(0xffffffffffffffffULL, t2A, off);
-            t3A += __shfl_xor_sync(0xffffffffffffffffULL, t3A, off);
-            t4A += __shfl_xor_sync(0xffffffffffffffffULL, t4A, off);
-            t5A += __shfl_xor_sync(0xffffffffffffffffULL, t5A, off);
-            brB += __shfl_xor_sync(0xffffffffffffffffULL, brB, off);
-            t1B += __shfl_xor_sync(0xffffffffffffffffULL, t1B, off);
-            t2B += __shfl_xor_sync(0xffffffffffffffffULL, t2B, off);
-            t3B += __shfl_xor_sync(0xffffffffffffffffULL, t3B, off);
-            t4B += __shfl_xor_sync(0xffffffffffffffffULL, t4B, off);
-            t5B += __shfl_xor_sync(0xffffffffffffffffULL, t5B, off);
+            brA += __shfl_xor_sync(0xffffffffULL, brA, off);
+            t1A += __shfl_xor_sync(0xffffffffULL, t1A, off);
+            t2A += __shfl_xor_sync(0xffffffffULL, t2A, off);
+            t3A += __shfl_xor_sync(0xffffffffULL, t3A, off);
+            t4A += __shfl_xor_sync(0xffffffffULL, t4A, off);
+            t5A += __shfl_xor_sync(0xffffffffULL, t5A, off);
+            brB += __shfl_xor_sync(0xffffffffULL, brB, off);
+            t1B += __shfl_xor_sync(0xffffffffULL, t1B, off);
+            t2B += __shfl_xor_sync(0xffffffffULL, t2B, off);
+            t3B += __shfl_xor_sync(0xffffffffULL, t3B, off);
+            t4B += __shfl_xor_sync(0xffffffffULL, t4B, off);
+            t5B += __shfl_xor_sync(0xffffffffULL, t5B, off);
          }
 
          if (lane == 0)

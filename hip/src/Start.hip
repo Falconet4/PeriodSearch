@@ -544,10 +544,14 @@ static int ps_use_fp32_tail(int iter)
 }
 
 
+extern int CUDA_warp_size;
+
 void LaunchCurve1Kernel(const int which, const int grid, const int inrel, const int lpoints, const int iter)
 {
 	static int wmv = -1;
 	if (wmv < 0) { const char* e = getenv("PS_WARP"); wmv = e ? atoi(e) : 1; }
+	/* A9: only use the warp-cooperative Curve1T on 32-lane waves. */
+	const int useWarp = wmv && (CUDA_warp_size == 32);
 	if (ps_use_fp32_tail(iter))
 	{
 		if (which == 1) CudaCalculateIter1Mrqcof1Curve1T_fp <<<grid, CUDA_BLOCK_DIM >>> (inrel, lpoints);
@@ -555,7 +559,7 @@ void LaunchCurve1Kernel(const int which, const int grid, const int inrel, const 
 	}
 	else
 	{
-		if (wmv)
+		if (useWarp)
 		{
 			if (which == 1) CudaCalculateIter1Mrqcof1Curve1Tw <<<grid, CUDA_BLOCK_DIM >>> (inrel, lpoints);
 			else            CudaCalculateIter1Mrqcof2Curve1Tw <<<grid, CUDA_BLOCK_DIM >>> (inrel, lpoints);

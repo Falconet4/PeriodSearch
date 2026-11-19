@@ -17,20 +17,15 @@
 template<int ISTART> __device__ double brightT_impl(freq_context *CUDA_LCC, double cg[],int jp,int Lpoints1,int Inrel,const double *sBl,const double *sDb,double clv,double clsv);
 __device__ __forceinline__ double brightT(freq_context *CUDA_LCC, double cg[],int jp,int Lpoints1,int Inrel,const double *sBl,const double *sDb,double clv,double clsv)
 {
-  return Inrel ? brightT_impl<2>(CUDA_LCC,cg,jp,Lpoints1,Inrel,sBl,sDb,clv,clsv)
-               : brightT_impl<1>(CUDA_LCC,cg,jp,Lpoints1,Inrel,sBl,sDb,clv,clsv);
+   return Inrel ? brightT_impl<2>(CUDA_LCC,cg,jp,Lpoints1,Inrel,sBl,sDb,clv,clsv)
+                : brightT_impl<1>(CUDA_LCC,cg,jp,Lpoints1,Inrel,sBl,sDb,clv,clsv);
 }
 
-template<int WM> __device__ void mrqcof_curve1T(freq_context *CUDA_LCC, double a[],
-	      double *alpha, double beta[],int Inrel,int Lpoints)
+/* A10: the bookkeeping shared by the FP64 and FP32-tail Curve1 routines.
+   Only the brightness sweep between load and reduce differs (double vs float,
+   warp-cooperative vs per-thread), so that part stays separate. */
+__device__ __forceinline__ void ps_curve1_load_bl(freq_context *CUDA_LCC, double *sh_Bl, double *sh_Db)
 {
-	int l,k,jp, lnp,Lpoints1=Lpoints+1;
-   double lave;
-   __shared__ double tmave[CUDA_BLOCK_DIM];
-   __shared__ double sh_Bl[9], sh_Db[18];
-   __shared__ __attribute__((aligned(16))) double sgeo[WM ? 4 : 1][PS_GEO_BATCH*PS_GEO_N];
-   __shared__ double swcA[WM ? 4 : 1][32], swcB[WM ? 4 : 1][32];
-   __shared__ int sfc[WM ? 4 : 1][32];
    if (threadIdx.x == 0)
    {
       sh_Bl[0]=(*CUDA_LCC).Blmat[1][1]; sh_Bl[1]=(*CUDA_LCC).Blmat[1][2]; sh_Bl[2]=(*CUDA_LCC).Blmat[1][3];
@@ -44,38 +39,13 @@ template<int WM> __device__ void mrqcof_curve1T(freq_context *CUDA_LCC, double a
       sh_Db[15]=(*CUDA_LCC).Dblm[2][3][1]; sh_Db[16]=(*CUDA_LCC).Dblm[2][3][2]; sh_Db[17]=(*CUDA_LCC).Dblm[2][3][3];
    }
    __syncthreads();
+}
 
-   lnp=(*CUDA_LCC).np;
-   lave=(*CUDA_LCC).ave;
-//precalc thread boundaries
-    int brtmph = Lpoints;
-	int brtmpl = 1 + threadIdx.x;
-//
-
-   const int ncoef_h = CUDA_ma;
-   const double cl_h = exp(a[ncoef_h - 1]);
-   const double cls_h = a[ncoef_h];
-   /* Lockstep point loop: every thread performs the same number of iterations so
-      that per-facet __syncthreads() inside brightT is safe (inactive lanes skip
-      the work).  Bit-identical to the guarded loop it replaces. */
-   if (WM)
-     {
-       {
-         const int wid = threadIdx.x >> 5, lane = threadIdx.x & 31;
-         ps_brightT_warp(CUDA_LCC,a,Inrel,Lpoints,sh_Bl,sh_Db,cl_h,cls_h,wid,lane,
-                         sgeo[wid],swcA[wid],swcB[wid],sfc[wid]);
-       }
-     }
-   else
-     {
-       for (int jp2 = 1 + threadIdx.x; jp2 <= Lpoints; jp2 += CUDA_BLOCK_DIM)
-         brightT(CUDA_LCC,a,jp2,Lpoints1,Inrel,sh_Bl,sh_Db,cl_h,cls_h);
-     }
-
-   __syncthreads();
-
-  if (Inrel == 1) {
-    int tmph,tmpl;
+__device__ __forceinline__ void ps_curve1_reduce(freq_context *CUDA_LCC, int Inrel, int Lpoints,
+                                                 double *tmave, double &lave)
+{
+   if (Inrel == 1) {
+     int tmph,tmpl,l,k,jp;
 	tmph=CUDA_ma/CUDA_BLOCK_DIM;
 	if(CUDA_ma%CUDA_BLOCK_DIM) tmph++;
 	tmpl=threadIdx.x*tmph;
@@ -110,13 +80,60 @@ template<int WM> __device__ void mrqcof_curve1T(freq_context *CUDA_LCC, double a
 	   }
 	   if (threadIdx.x==0) lave=tmave[0]+tmave[1];
 //parallel reduction end
+   }
+}
 
-  }
+__device__ __forceinline__ void ps_curve1_finish(freq_context *CUDA_LCC, int lnp, int Lpoints, double lave)
+{
 	  if (threadIdx.x==0)
 	  {
 	   (*CUDA_LCC).np=lnp+Lpoints;
 	   (*CUDA_LCC).ave=lave;
 	  }
+}
+
+template<int WM> __device__ void mrqcof_curve1T(freq_context *CUDA_LCC, double a[],
+	      double *alpha, double beta[],int Inrel,int Lpoints)
+{
+	int lnp, Lpoints1=Lpoints+1;
+   double lave;
+   __shared__ double tmave[CUDA_BLOCK_DIM];
+   __shared__ double sh_Bl[9], sh_Db[18];
+   __shared__ __attribute__((aligned(16))) double sgeo[WM ? 4 : 1][PS_GEO_BATCH*PS_GEO_N];
+   __shared__ double swcA[WM ? 4 : 1][32], swcB[WM ? 4 : 1][32];
+   __shared__ int sfc[WM ? 4 : 1][32];
+   ps_curve1_load_bl(CUDA_LCC, sh_Bl, sh_Db);
+
+   lnp=(*CUDA_LCC).np;
+   lave=(*CUDA_LCC).ave;
+//precalc thread boundaries
+    int brtmph = Lpoints;
+	int brtmpl = 1 + threadIdx.x;
+//
+
+   const int ncoef_h = CUDA_ma;
+   const double cl_h = exp(a[ncoef_h - 1]);
+   const double cls_h = a[ncoef_h];
+   /* Lockstep point loop: every thread performs the same number of iterations so
+      that per-facet __syncthreads() inside brightT is safe (inactive lanes skip
+      the work).  Bit-identical to the guarded loop it replaces. */
+   if (WM && static_cast<int>(warpSize) == 32)
+     {
+       {
+         const int wid = threadIdx.x / warpSize, lane = threadIdx.x % warpSize;
+         ps_brightT_warp(CUDA_LCC,a,Inrel,Lpoints,sh_Bl,sh_Db,cl_h,cls_h,wid,lane,
+                         sgeo[wid],swcA[wid],swcB[wid],sfc[wid]);
+       }
+     }
+   else
+     {
+       for (int jp2 = 1 + threadIdx.x; jp2 <= Lpoints; jp2 += CUDA_BLOCK_DIM)
+         brightT(CUDA_LCC,a,jp2,Lpoints1,Inrel,sh_Bl,sh_Db,cl_h,cls_h);
+     }
+
+   __syncthreads();
+   ps_curve1_reduce(CUDA_LCC, Inrel, Lpoints, tmave, lave);
+   ps_curve1_finish(CUDA_LCC, lnp, Lpoints, lave);
 }
 
 
@@ -405,23 +422,11 @@ __device__ __forceinline__ double brightT_fp(freq_context *CUDA_LCC, double cg[]
 __device__ void mrqcof_curve1T_fp(freq_context *CUDA_LCC, double a[],
 	      double *alpha, double beta[],int Inrel,int Lpoints)
 {
-	int l,k,jp, lnp,Lpoints1=Lpoints+1;
+	int lnp, Lpoints1=Lpoints+1;
    double lave;
    __shared__ double tmave[CUDA_BLOCK_DIM];
    __shared__ double sh_Bl[9], sh_Db[18];
-   if (threadIdx.x == 0)
-   {
-      sh_Bl[0]=(*CUDA_LCC).Blmat[1][1]; sh_Bl[1]=(*CUDA_LCC).Blmat[1][2]; sh_Bl[2]=(*CUDA_LCC).Blmat[1][3];
-      sh_Bl[3]=(*CUDA_LCC).Blmat[2][1]; sh_Bl[4]=(*CUDA_LCC).Blmat[2][2]; sh_Bl[5]=(*CUDA_LCC).Blmat[2][3];
-      sh_Bl[6]=(*CUDA_LCC).Blmat[3][1]; sh_Bl[7]=(*CUDA_LCC).Blmat[3][2]; sh_Bl[8]=(*CUDA_LCC).Blmat[3][3];
-      sh_Db[0]=(*CUDA_LCC).Dblm[1][1][1]; sh_Db[1]=(*CUDA_LCC).Dblm[1][1][2]; sh_Db[2]=(*CUDA_LCC).Dblm[1][1][3];
-      sh_Db[3]=(*CUDA_LCC).Dblm[1][2][1]; sh_Db[4]=(*CUDA_LCC).Dblm[1][2][2]; sh_Db[5]=(*CUDA_LCC).Dblm[1][2][3];
-      sh_Db[6]=(*CUDA_LCC).Dblm[1][3][1]; sh_Db[7]=(*CUDA_LCC).Dblm[1][3][2]; sh_Db[8]=(*CUDA_LCC).Dblm[1][3][3];
-      sh_Db[9]=(*CUDA_LCC).Dblm[2][1][1]; sh_Db[10]=(*CUDA_LCC).Dblm[2][1][2]; sh_Db[11]=(*CUDA_LCC).Dblm[2][1][3];
-      sh_Db[12]=(*CUDA_LCC).Dblm[2][2][1]; sh_Db[13]=(*CUDA_LCC).Dblm[2][2][2]; sh_Db[14]=(*CUDA_LCC).Dblm[2][2][3];
-      sh_Db[15]=(*CUDA_LCC).Dblm[2][3][1]; sh_Db[16]=(*CUDA_LCC).Dblm[2][3][2]; sh_Db[17]=(*CUDA_LCC).Dblm[2][3][3];
-   }
-   __syncthreads();
+   ps_curve1_load_bl(CUDA_LCC, sh_Bl, sh_Db);
 
    lnp=(*CUDA_LCC).np;
    lave=(*CUDA_LCC).ave;
@@ -440,50 +445,8 @@ __device__ void mrqcof_curve1T_fp(freq_context *CUDA_LCC, double a[],
      brightT_fp(CUDA_LCC,a,jp2,Lpoints1,Inrel,sh_Bl,sh_Db,cl_h,cls_h);
 
    __syncthreads();
-
-  if (Inrel == 1) {
-    int tmph,tmpl;
-	tmph=CUDA_ma/CUDA_BLOCK_DIM;
-	if(CUDA_ma%CUDA_BLOCK_DIM) tmph++;
-	tmpl=threadIdx.x*tmph;
-	tmph=tmpl+tmph;
-	if (tmph>CUDA_ma) tmph=CUDA_ma;
-	tmpl++;
-	if (tmpl==1) tmpl++;
-
-	  const int dstride = CUDA_ma + 1;
-	  for (l=tmpl; l <= tmph; l++)
-		{
-			double dsum = (*CUDA_LCC).dytemp[1 * dstride + l];
-			for (jp = 2; jp <= Lpoints; jp++)
-				dsum = dsum + (*CUDA_LCC).dytemp[jp * dstride + l];
-			(*CUDA_LCC).dave[l] = dsum;
-	  }
-		tmave[threadIdx.x] = 0;
-	   {
-	     int ohi = Lpoints / CUDA_BLOCK_DIM; if (Lpoints % CUDA_BLOCK_DIM) ohi++;
-	     int olo = threadIdx.x * ohi; ohi = olo + ohi;
-	     if (ohi > Lpoints) ohi = Lpoints; olo++;
-	     for (jp = olo; jp <= ohi; jp++) tmave[threadIdx.x] += (*CUDA_LCC).ytemp[jp];
-	   }
-	   __syncthreads();
-//parallel reduction
-	   k=CUDA_BLOCK_DIM>>1;
-	   while (k>1)
-	   {
-		   if (threadIdx.x<k) tmave[threadIdx.x]+=tmave[threadIdx.x+k];
-		   k=k>>1;
-		   __syncthreads();
-	   }
-	   if (threadIdx.x==0) lave=tmave[0]+tmave[1];
-//parallel reduction end
-
-  }
-	  if (threadIdx.x==0)
-	  {
-	   (*CUDA_LCC).np=lnp+Lpoints;
-	   (*CUDA_LCC).ave=lave;
-	  }
+   ps_curve1_reduce(CUDA_LCC, Inrel, Lpoints, tmave, lave);
+   ps_curve1_finish(CUDA_LCC, lnp, Lpoints, lave);
 }
 
 

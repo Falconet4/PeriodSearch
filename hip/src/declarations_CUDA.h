@@ -16,7 +16,7 @@ __device__ double mrqcof(freq_context *CUDA_LCC, double a[], int ia[], int ma,
 //__device__ int gauss_errc(freq_context *CUDA_LCC,int n, double b[]);
 extern __device__ int gauss_errc(freq_context *CUDA_LCC, int ma);
 __device__ void blmatrix(freq_context *CUDA_LCC,double bet, double lam);
-__device__ double conv(freq_context *CUDA_LCC,int nc,int tmpl,int tmph,int brtmpl,int brtmph);
+__device__ double conv(freq_context *CUDA_LCC,int nc,int tmpl,int tmph,int brtmpl,int brtmph,int brtmpl2,int brtmph2,int do_dyda);
 __device__ double bright(freq_context *CUDA_LCC,double cg[],int jp,int Lpoints1,int Inrel);
 __device__ void matrix_neo(freq_context *CUDA_LCC, double cg[],int lnp1, int Lpoints);
 __global__ void CudaCalculateIter1Mrqcof2Curve2(int inrel,int lpoints);

@@ -17,6 +17,7 @@ double *vector_double(int length)
    {
       fprintf(stderr, "failure in 'vector_double()' \n");
       fflush(stderr);
+      exit(1);
    }
    return (p_x);
 }
@@ -29,6 +30,7 @@ int *vector_int(int length)
    {
       fprintf(stderr, "failure in 'vector_int()' \n");
       fflush(stderr);
+      exit(1);
     }
     return (p_x);
 }
@@ -39,12 +41,21 @@ double **matrix_double(int rows, int columns)
    int i;
 
    p_x = (double **)malloc((rows + 1) * sizeof(double *));
-   for (i = 0; (i <= rows) && (!i || p_x[i-1]); i++)
-      p_x[i] = (double *) malloc((columns + 1) * sizeof(double));
-   if (i < rows)
+   if (p_x == NULL)
    {
       fprintf(stderr,"failure in 'matrix_double()' \n");
       fflush(stderr);
+      exit(1);
+   }
+   for (i = 0; i <= rows; i++)
+   {
+      p_x[i] = (double *) malloc((columns + 1) * sizeof(double));
+      if (p_x[i] == NULL)
+      {
+         fprintf(stderr,"failure in 'matrix_double()' \n");
+         fflush(stderr);
+         exit(1);
+      }
    }
    return (p_x);
 }
@@ -55,12 +66,21 @@ int **matrix_int(int rows, int columns)
    int i;
 
    p_x = (int **) malloc((rows + 1) * sizeof(int *));
-   for (i = 0; (i <= rows) && (!i || p_x[i-1]); i++)
-      p_x[i] = (int *) malloc((columns + 1) * sizeof(int));
-   if (i < rows)
+   if (p_x == NULL)
    {
       fprintf(stderr,"failure in 'matrix_int()' \n");
       fflush(stderr);
+      exit(1);
+   }
+   for (i = 0; i <= rows; i++)
+   {
+      p_x[i] = (int *) malloc((columns + 1) * sizeof(int));
+      if (p_x[i] == NULL)
+      {
+         fprintf(stderr,"failure in 'matrix_int()' \n");
+         fflush(stderr);
+         exit(1);
+      }
    }
    return (p_x);
 }
@@ -71,21 +91,31 @@ double ***matrix_3_double(int n_1, int n_2, int n_3)
    double ***p_x;
 
    p_x = (double ***) malloc((n_1 + 1) * sizeof(double **));
-   for (i = 0; i <= n_1; i++)
-   {
-      p_x[i] = (double **) malloc((n_2 + 1) * sizeof(double *));
-      for (j = 0; j <= n_2; j++)
-         p_x[i][j] = (double *)malloc((n_3 + 1) * sizeof(double));
-      if (j < n_2)
-      {
-         fprintf(stderr,"failure in 'matrix_3_double' \n");
-         fflush(stderr);
-      }
-   }
-   if (i < n_1)
+   if (p_x == NULL)
    {
       fprintf(stderr,"failure in 'matrix_3_double' \n");
       fflush(stderr);
+      exit(1);
+   }
+   for (i = 0; i <= n_1; i++)
+   {
+      p_x[i] = (double **) malloc((n_2 + 1) * sizeof(double *));
+      if (p_x[i] == NULL)
+      {
+         fprintf(stderr,"failure in 'matrix_3_double' \n");
+         fflush(stderr);
+         exit(1);
+      }
+      for (j = 0; j <= n_2; j++)
+      {
+         p_x[i][j] = (double *)malloc((n_3 + 1) * sizeof(double));
+         if (p_x[i][j] == NULL)
+         {
+            fprintf(stderr,"failure in 'matrix_3_double' \n");
+            fflush(stderr);
+            exit(1);
+         }
+      }
    }
 
    return (p_x);

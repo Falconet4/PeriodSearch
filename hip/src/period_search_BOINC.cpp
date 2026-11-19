@@ -25,6 +25,7 @@
 #include "stdafx.h"
 #include <cstdio>
 #include <cstdlib>
+#include <cstdarg>
 #include <cmath>
 #include <ctime>
 #include <cstring>
@@ -93,6 +94,69 @@ constexpr auto checkpoint_file = "period_search_state";
 constexpr auto input_filename = "period_search_in";
 constexpr auto output_filename = "period_search_out";
 
+/* Checked input read, ported from the AppDev branch (A1).  Every required
+   field must convert; a truncated or malformed workunit exits here instead of
+   continuing with uninitialised stack values.  The number of conversions is
+   the number of '%' directives in the format (all formats used here have no
+   literal '%'). */
+static int xfscanf(FILE* f, const char* fmt, ...)
+{
+	va_list ap;
+	va_start(ap, fmt);
+	const int got = vfscanf(f, fmt, ap);
+	va_end(ap);
+
+	int want = 0;
+	for (const char* p = fmt; *p; ++p)
+		if (*p == '%') ++want;
+
+	if (got != want)
+	{
+		fprintf(stderr, "\nError: input read failed (got %d of %d) for \"%s\"\n", got, want, fmt);
+		fflush(stderr);
+		exit(2);
+	}
+	return got;
+}
+
+/* Validate the period/time header before it reaches the frequency sweep
+   (A7/B5, ported from the AppDev branch).  AppDev computes `(int)n_max`
+   before its checks, so a zero step is still a UB cast there; here the step
+   and the point count are validated first and the count is never truncated
+   to int. */
+static void validate_frequency_range(double startPeriod, double endPeriod,
+                                     double jdMin, double jdMax, double periodStepCoef,
+                                     double& startFrequency, double& endFrequency, double& frequencyStep)
+{
+	if (!(startPeriod > 0.0) || !(endPeriod > 0.0))
+	{
+		fprintf(stderr, "\nError: period bounds must be positive (start %g, end %g)\n", startPeriod, endPeriod);
+		fflush(stderr); exit(2);
+	}
+	if (!(jdMax > jdMin))
+	{
+		fprintf(stderr, "\nError: observation time span is zero or negative (jdMin %g, jdMax %g)\n", jdMin, jdMax);
+		fflush(stderr); exit(2);
+	}
+	if (!(periodStepCoef > 0.0))
+	{
+		fprintf(stderr, "\nError: period step coefficient must be positive (%g)\n", periodStepCoef);
+		fflush(stderr); exit(2);
+	}
+
+	startFrequency = 1.0 / startPeriod;
+	endFrequency = 1.0 / endPeriod;
+	frequencyStep = 0.5 / (jdMax - jdMin) / 24.0 * periodStepCoef;
+
+	const double nfreq = (startFrequency - endFrequency) / frequencyStep + 1.0;
+	if (!(frequencyStep > 0.0) || endFrequency > startFrequency || !(nfreq >= 1.0) || nfreq > (double)MAX_N_FPOINTS)
+	{
+		fprintf(stderr, "\nError: invalid frequency sweep (start %.6g, end %.6g, step %.6g, points %.6g)\n",
+			startFrequency, endFrequency, frequencyStep, nfreq);
+		fflush(stderr); exit(2);
+	}
+}
+
 int DoCheckpoint(MFILE& mf, const int nlines, const int newConw, const double conwr) {
 	string resolvedName;
 
@@ -140,7 +204,7 @@ void update_shmem() {
 // NOTE: global parameters
 int l_max, m_max, n_iter, last_call,
 n_coef, num_fac, l_curves, n_ph_par,
-l_points[MAX_LC + 1], in_rel[MAX_LC + 1],
+l_points[MAX_LC + 2], in_rel[MAX_LC + 2],
 deallocate, max_l_points; // n_iter,
 
 double o_chi_square, chi_square, a_lambda, a_lamda_incr, a_lamda_start, phi_0, scale,
@@ -152,7 +216,7 @@ d_sphere[MAX_N_FAC + 1][MAX_N_PAR + 1], d_g[MAX_N_FAC + 1][MAX_N_PAR + 1],
 normal[MAX_N_FAC + 1][3], bl_matrix[4][4],
 pleg[MAX_N_FAC + 1][MAX_LM + 1][MAX_LM + 1],
 d_bl_matrix[3][4][4],
-weight[MAX_N_OBS + 1];
+weight[MAX_N_OBS + 4];
 
 auto cuda_device = -1;
 APP_INIT_DATA aid;
@@ -197,6 +261,12 @@ int main(int argc, char** argv)
 	char* stringTemp;
 
 	stringTemp = static_cast<char*>(malloc(MAX_LINE_LENGTH));
+	if (stringTemp == NULL)
+	{
+		fprintf(stderr, "period_search: cannot allocate input line buffer\n");
+		fflush(stderr);
+		exit(2);
+	}
 
 	//   ee = matrix_double(MAX_N_OBS,3);
 	//   ee0 = matrix_double(MAX_N_OBS,3);
@@ -205,8 +275,8 @@ int main(int argc, char** argv)
 
 	ifp = matrix_int(MAX_N_FAC, 4);
 	tim = vector_double(MAX_N_OBS);
-	brightness = vector_double(MAX_N_OBS);
-	sig = vector_double(MAX_N_OBS);
+	brightness = vector_double(MAX_N_OBS + 3);
+	sig = vector_double(MAX_N_OBS + 3);
 	cg = vector_double(MAX_N_PAR);
 	cgFirst = vector_double(MAX_N_PAR);
 	t = vector_double(MAX_N_FAC);
@@ -293,6 +363,14 @@ int main(int argc, char** argv)
 		n = fscanf(state, "%d %d %lf", &nlines, &newConw, &conwR);
 		fclose(state);
 	}
+	/* C3/H2: the checkpoint is app-written, but nlines must be a plausible line
+	   count.  A negative value starts the sweep at n <= 0; a value above
+	   MAX_N_FPOINTS can overflow nlines+1 and is beyond any legal sweep. */
+	if (state && n == 3 && (nlines < 0 || nlines > MAX_N_FPOINTS))
+	{
+		fprintf(stderr, "\nError: checkpoint has invalid line count %d\n", nlines);
+		fflush(stderr); exit(2);
+	}
 	if (state && n == 3) {
 		checkpointExists = 1;
 		nStartFrom = nlines + 1;
@@ -333,42 +411,85 @@ int main(int argc, char** argv)
 #endif
 
 	// NOTE: Period interval (hours) fixed or free
-	fscanf(infile, "%lf %lf %lf %d", &startPeriod, &periodStepCoef, &endPeriod, &ia_prd); 	fgets(stringTemp, MAX_LINE_LENGTH, infile);
+	xfscanf(infile, "%lf %lf %lf %d", &startPeriod, &periodStepCoef, &endPeriod, &ia_prd); 	fgets(stringTemp, MAX_LINE_LENGTH, infile);
 
 	// NOTE: Epoch of zero time t0
-	fscanf(infile, "%lf", &jd00);                          	fgets(stringTemp, MAX_LINE_LENGTH, infile);
+	xfscanf(infile, "%lf", &jd00);                          	fgets(stringTemp, MAX_LINE_LENGTH, infile);
 
 	// NOTE: Initial fixed rotation angle fi0
-	fscanf(infile, "%lf", &phi_0);                          	fgets(stringTemp, MAX_LINE_LENGTH, infile);
+	xfscanf(infile, "%lf", &phi_0);                          	fgets(stringTemp, MAX_LINE_LENGTH, infile);
 
 	// NOTE: The weight factor for conv. reg.
-	fscanf(infile, "%lf", &conw);                           	fgets(stringTemp, MAX_LINE_LENGTH, infile);
+	xfscanf(infile, "%lf", &conw);                           	fgets(stringTemp, MAX_LINE_LENGTH, infile);
 
 	// NOTE: Degree and order of the Laplace series
-	fscanf(infile, "%d %d", &l_max, &m_max);                	fgets(stringTemp, MAX_LINE_LENGTH, infile);
+	xfscanf(infile, "%d %d", &l_max, &m_max);                	fgets(stringTemp, MAX_LINE_LENGTH, infile);
 
 	// NOTE: Number of triangulation rows per octant
-	fscanf(infile, "%d", &nrows);                               fgets(stringTemp, MAX_LINE_LENGTH, infile);
+	xfscanf(infile, "%d", &nrows);                               fgets(stringTemp, MAX_LINE_LENGTH, infile);
 
 	// NOTE: Initial guesses for phase funct. params.
-	fscanf(infile, "%lf %d", &par[1], &ia_par[1]);              fgets(stringTemp, MAX_LINE_LENGTH, infile);
-	fscanf(infile, "%lf %d", &par[2], &ia_par[2]);              fgets(stringTemp, MAX_LINE_LENGTH, infile);
-	fscanf(infile, "%lf %d", &par[3], &ia_par[3]);              fgets(stringTemp, MAX_LINE_LENGTH, infile);
+	xfscanf(infile, "%lf %d", &par[1], &ia_par[1]);              fgets(stringTemp, MAX_LINE_LENGTH, infile);
+	xfscanf(infile, "%lf %d", &par[2], &ia_par[2]);              fgets(stringTemp, MAX_LINE_LENGTH, infile);
+	xfscanf(infile, "%lf %d", &par[3], &ia_par[3]);              fgets(stringTemp, MAX_LINE_LENGTH, infile);
 
 	// NOTE: Initial Lambert coefficient (L - S = 1)
-	fscanf(infile, "%lf %d", &cl, &ia_cl);                      fgets(stringTemp, MAX_LINE_LENGTH, infile);
+	xfscanf(infile, "%lf %d", &cl, &ia_cl);                      fgets(stringTemp, MAX_LINE_LENGTH, infile);
 
 	// NOTE: Maximum number of iterations (when > 1) or  minimum difference in dev to stop (when < 1)
-	fscanf(infile, "%lf", &stopCondition);                     fgets(stringTemp, MAX_LINE_LENGTH, infile);
+	xfscanf(infile, "%lf", &stopCondition);                     fgets(stringTemp, MAX_LINE_LENGTH, infile);
 
 	// NOTE: Minimum number of iterations when stop_condition < 1
-	fscanf(infile, "%d", &nIterMin);                          fgets(stringTemp, MAX_LINE_LENGTH, infile);
+	xfscanf(infile, "%d", &nIterMin);                          fgets(stringTemp, MAX_LINE_LENGTH, infile);
 
 	// NOTE: Multiplicative factor for Alamda
-	fscanf(infile, "%lf", &a_lamda_incr);                       fgets(stringTemp, MAX_LINE_LENGTH, infile);
+	xfscanf(infile, "%lf", &a_lamda_incr);                       fgets(stringTemp, MAX_LINE_LENGTH, infile);
 
 	// NOTE: Alamda initial value
-	fscanf(infile, "%lf", &a_lamda_start);                      fgets(stringTemp, MAX_LINE_LENGTH, infile);
+	xfscanf(infile, "%lf", &a_lamda_start);                     	fgets(stringTemp, MAX_LINE_LENGTH, infile);
+
+	/* B2/B5: validate the header before any of it reaches a fixed-size array
+	   or a divisor.  AppDev only catches l_max through the later parameter-count
+	   guard, which runs after sphfunc()/ellfit() have already overrun. */
+	if (l_max < 0 || m_max < 0 || l_max > MAX_LM || m_max > MAX_LM)
+	{
+		fprintf(stderr, "\nError: spherical-harmonic degree/order (%d,%d) is outside 0..%d\n", l_max, m_max, MAX_LM);
+		fflush(stderr); exit(2);
+	}
+	if (!(conw > 0.0))
+	{
+		fprintf(stderr, "\nError: convexity weight must be positive (%g)\n", conw);
+		fflush(stderr); exit(2);
+	}
+	if (nrows < 1)
+	{
+		fprintf(stderr, "\nError: number of triangulation rows must be positive (%d)\n", nrows);
+		fflush(stderr); exit(2);
+	}
+	/* G7: bound nrows before the triangulation fill.  The t/f vertex arrays hold
+	   MAX_N_FAC+1 entries and are filled with ~4*nrows^2 values before the
+	   num_fac check; the old check also overflowed int for huge nrows. */
+	if (8LL * nrows * nrows > (long long)MAX_N_FAC)
+	{
+		fprintf(stderr, "\nError: nrows = %d gives %lld facets, more than MAX_N_FAC = %d\n",
+			nrows, 8LL * nrows * nrows, MAX_N_FAC);
+		fflush(stderr); exit(2);
+	}
+	if (!(stopCondition == stopCondition) || stopCondition > 2147483647.0)
+	{
+		fprintf(stderr, "\nError: stop condition is not finite or too large (%g)\n", stopCondition);
+		fflush(stderr); exit(2);
+	}
+	if (!(cl > 0.0))
+	{
+		fprintf(stderr, "\nError: Lambert coefficient cl must be positive (%g)\n", cl);
+		fflush(stderr); exit(2);
+	}
+	if (!(a_lamda_incr > 0.0))
+	{
+		fprintf(stderr, "\nError: Alamda increment must be positive (%g)\n", a_lamda_incr);
+		fflush(stderr); exit(2);
+	}
 
 	if (boinc_is_standalone())
 	{
@@ -389,11 +510,19 @@ int main(int argc, char** argv)
 
 	// NOTE: light curves + geometry file
 	// NOTE: number of light curves and the first relative one
-	fscanf(infile, "%d", &l_curves);
+	xfscanf(infile, "%d", &l_curves);
 
 	if (boinc_is_standalone())
 	{
 		printf("%d  Number of light curves\n", l_curves);
+	}
+
+	/* A6: make the zero/negative-count case explicit instead of relying on the
+	   no-observations/allocation guards further down. */
+	if (l_curves < 1)
+	{
+		fprintf(stderr, "\nError: Number of light curves must be positive (%d)\n", l_curves);
+		fflush(stderr); exit(2);
 	}
 
 	if (l_curves > MAX_LC)
@@ -419,7 +548,12 @@ int main(int argc, char** argv)
 	for (i = 1; i <= l_curves; i++)
 	{
 		ave = 0; /* average */
-		fscanf(infile, "%d %d", &l_points[i], &iTemp); /* points in this lightcurve */
+		xfscanf(infile, "%d %d", &l_points[i], &iTemp); /* points in this lightcurve */
+		if (l_points[i] < 1)
+		{
+			fprintf(stderr, "\nError: light curve %d has %d points (must be >= 1)\n", i, l_points[i]);
+			fflush(stderr); exit(2);
+		}
 		if (boinc_is_standalone())
 		{
 			printf("%d points in light curve[%d]\n", l_points[i], i);
@@ -429,12 +563,13 @@ int main(int argc, char** argv)
 		if (in_rel[i] == 0)
 			onlyrel = 0;
 
-		if (l_points[i] > max_l_points) max_l_points = l_points[i];
-
 		if (l_points[i] > POINTS_MAX)
 		{
 			fprintf(stderr, "\nError: Number of lc points is greater than POINTS_MAX = %d\n", POINTS_MAX); fflush(stderr); exit(2);
 		}
+
+		/* A13: only record the size after the POINTS_MAX check has passed. */
+		if (l_points[i] > max_l_points) max_l_points = l_points[i];
 
 		// NOTE: loop over one light curve
 		for (j = 1; j <= l_points[i]; j++)
@@ -446,9 +581,9 @@ int main(int argc, char** argv)
 				fprintf(stderr, "\nError: Number of data is greater than MAX_N_OBS = %d\n", MAX_N_OBS); fflush(stderr); exit(2);
 			}
 
-			fscanf(infile, "%lf %lf", &tim[ndata], &brightness[ndata]); // NOTE: JD, brightness
-			fscanf(infile, "%lf %lf %lf", &e0[1], &e0[2], &e0[3]);      // NOTE: ecliptic astronomical tempocentric coordinates of the Sun in AU
-			fscanf(infile, "%lf %lf %lf", &e[1], &e[2], &e[3]);         // NOTE: ecliptic astronomical centric coordinates of the Earth in AU
+			xfscanf(infile, "%lf %lf", &tim[ndata], &brightness[ndata]); // NOTE: JD, brightness
+			xfscanf(infile, "%lf %lf %lf", &e0[1], &e0[2], &e0[3]);      // NOTE: ecliptic astronomical tempocentric coordinates of the Sun in AU
+			xfscanf(infile, "%lf %lf %lf", &e[1], &e[2], &e[3]);         // NOTE: ecliptic astronomical centric coordinates of the Earth in AU
 
 			// NOTE: selects the minimum and maximum JD
 			if (tim[ndata] < jdMin) jdMin = tim[ndata];
@@ -458,6 +593,14 @@ int main(int argc, char** argv)
 			// NOTE: normals of distance vectors
 			e0Len = sqrt(e0[1] * e0[1] + e0[2] * e0[2] + e0[3] * e0[3]);
 			elen = sqrt(e[1] * e[1] + e[2] * e[2] + e[3] * e[3]);
+
+			/* H4: a zero-length (or non-finite) Earth/Sun vector makes the
+			   normalization and the acos below invalid. */
+			if (!(elen > 0.0) || !(e0Len > 0.0))
+			{
+				fprintf(stderr, "\nError: zero-length Sun/Earth vector at observation %d\n", ndata);
+				fflush(stderr); exit(2);
+			}
 
 			ave += brightness[ndata];
 
@@ -471,6 +614,9 @@ int main(int argc, char** argv)
 			if (j == 1)
 			{
 				cosAlpha = host_dot_product(e, e0) / (elen * e0Len);
+				/* H4: match the device's clamp; acos() is NaN outside [-1,1]. */
+				if (cosAlpha > 1.0) cosAlpha = 1.0;
+				else if (cosAlpha < -1.0) cosAlpha = -1.0;
 				al[i] = acos(cosAlpha); /* solar phase angle */
 				/* Find the smallest solar phase al0 (not important, just for info) */
 				if (al[i] < al0)
@@ -504,11 +650,19 @@ int main(int argc, char** argv)
 	for (i = 1; i <= l_curves; i++)
 		weightLc[i] = -1;
 
-	/* reads weights */
-	while (feof(infile) == 0)
+	/* reads weights (A2): stop on the first failed conversion instead of
+	   running the body once more on a stale lcNumber.  A3: the index comes
+	   straight from the file, so bound it before indexing weightLc. */
+	for (;;)
 	{
-		fscanf(infile, "%d", &lcNumber);
-		fscanf(infile, "%lf", &weightLc[lcNumber]);
+		if (fscanf(infile, "%d", &lcNumber) != 1) break;
+		if (lcNumber < 1 || lcNumber > l_curves)
+		{
+			fprintf(stderr, "\nError: light curve weight index %d is outside 1..%d\n", lcNumber, l_curves);
+			fflush(stderr);
+			exit(2);
+		}
+		if (fscanf(infile, "%lf", &weightLc[lcNumber]) != 1) break;
 		if (boinc_is_standalone())
 		{
 			printf("Weights: Light curve[%d], Weight[%g]\n", lcNumber, weightLc[lcNumber]);
@@ -553,6 +707,14 @@ int main(int argc, char** argv)
 		ial0 = ial0_abs;
 	}
 
+	/* B5: with no observations, ial0 stays -1 and sig[ial0] would read out of
+	   bounds. */
+	if (ial0 < 1)
+	{
+		fprintf(stderr, "\nError: no valid solar phase angle (no observations)\n");
+		fflush(stderr); exit(2);
+	}
+
 	/* Initial shape guess */
 	rfit = sqrt(2 * sig[ial0] / (0.5 * PI * (1 + cos(al0))));
 	escl = rfit / sqrt((a * b + b * cAxis + a * cAxis) / 3);
@@ -573,6 +735,9 @@ int main(int argc, char** argv)
 	l_curves = l_curves + 1;
 	l_points[l_curves] = 3;
 	in_rel[l_curves] = 0;
+	/* B4: the device dytemp/ytemp allocations are sized from max_l_points, so
+	   it must include this synthetic 3-point curve. */
+	if (l_points[l_curves] > max_l_points) max_l_points = l_points[l_curves];
 
 	// extract a --device option
 
@@ -699,9 +864,8 @@ int main(int argc, char** argv)
 
 		ellfit(cgFirst, a, b, cAxis, num_fac, n_coef, at, af);
 
-		startFrequency = 1 / startPeriod;
-		endFrequency = 1 / endPeriod;
-		frequencyStep = 0.5 / (jdMax - jdMin) / 24 * periodStepCoef;
+		validate_frequency_range(startPeriod, endPeriod, jdMin, jdMax, periodStepCoef,
+		                         startFrequency, endFrequency, frequencyStep);
 
 		/* Give ia the value 0/1 if it's fixed/free */
 		ia[n_coef + 1] = ia_beta_pole;
@@ -814,9 +978,8 @@ int main(int argc, char** argv)
 
 	ellfit(cgFirst, a, b, cAxis, num_fac, n_coef, at, af);
 
-	startFrequency = 1 / startPeriod;
-	endFrequency = 1 / endPeriod;
-	frequencyStep = 0.5 / (jdMax - jdMin) / 24 * periodStepCoef;
+	validate_frequency_range(startPeriod, endPeriod, jdMin, jdMax, periodStepCoef,
+	                         startFrequency, endFrequency, frequencyStep);
 
 	/* Give ia the value 0/1 if it's fixed/free */
 	ia[n_coef + 1] = ia_beta_pole;

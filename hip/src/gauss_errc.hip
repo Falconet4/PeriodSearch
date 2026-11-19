@@ -11,6 +11,9 @@
 #else
 #define PS_WAVE_BITS 5
 #endif
+/* A8: the sync mask must not advertise lanes that do not exist.  A 64-bit
+   mask on a 32-lane wave is formally undefined even though it is tolerated. */
+#define PS_WAVE_MASK ((PS_WAVE_BITS == 6) ? 0xffffffffffffffffULL : 0xffffffffULL)
 
 
 #include <hip/hip_runtime.h>
@@ -57,18 +60,20 @@ __device__ int gauss_errc(freq_context* CUDA_LCC, const int ma)
 			if (nent > CUDA_BLOCK_DIM) nent = CUDA_BLOCK_DIM;
 			double big = -1.0;
 			int p = 0;
-			for (int base = 0; base < nent; base += 32)
+			const int wave = 1 << PS_WAVE_BITS;
+			const int off0 = wave >> 1;
+			for (int base = 0; base < nent; base += wave)
 			{
 				const int t = base + lane;
 				const double v = (t < nent) ? sh_big[t] : -1.0;
 				double m = v;
 				#pragma unroll
-				for (int off = 16; off > 0; off >>= 1)
+				for (int off = off0; off > 0; off >>= 1)
 				{
-					const double o = __shfl_xor_sync(0xffffffffffffffffULL, m, off);
+					const double o = __shfl_xor_sync(PS_WAVE_MASK, m, off);
 					m = (o > m) ? o : m;
 				}
-				const unsigned long long eq = __ballot_sync(0xffffffffffffffffULL, (t < nent) && (v == m));
+				const unsigned long long eq = __ballot_sync(PS_WAVE_MASK, (t < nent) && (v == m));
 				if (lane == 0 && eq != 0ULL)
 				{
 					const int hi = 63 - __clzll(eq);

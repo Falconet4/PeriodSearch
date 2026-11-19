@@ -15,4 +15,4 @@ void CUDAUnprepare(void);
 
 void GetCUDAOccupancy(const int cudaDevice);
 
-void LaunchCurve1Kernel(const int which, const int grid, const int inrel, const int lpoints);
+void LaunchCurve1Kernel(const int which, const int grid, const int inrel, const int lpoints, const int iter);

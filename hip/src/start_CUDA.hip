@@ -21,6 +21,28 @@
 #include <time.h>
 #endif
 
+/* A4: report the exact failing HIP call instead of collapsing many results
+   into one status that is tested only after the last call. */
+static void ps_hip_ok(hipError_t e, const char* what)
+{
+	if (e != hipSuccess)
+	{
+		fprintf(stderr, "period_search: %s failed: %s\n", what, hipGetErrorString(e));
+		fflush(stderr);
+		exit(1);
+	}
+}
+
+/* C1: the spin guard must allow the configured iteration count, which for
+   stop_condition > 1 is n_iter_max (not just MAX_N_ITER). */
+static long long ps_max_spin(int n_iter_max, int n_iter_min)
+{
+	int m = MAX_N_ITER;
+	if (n_iter_max > m) m = n_iter_max;
+	if (n_iter_min > m) m = n_iter_min;
+	return (long long)m + 16;
+}
+
 //global to all freq
 __constant__ int /*CUDA_n,*/CUDA_Ncoef, CUDA_Nphpar, CUDA_Numfac, CUDA_Numfac1, CUDA_Dg_block;
 __constant__ int CUDA_ia[MAX_N_PAR + 1];
@@ -71,8 +93,18 @@ __device__ const int2 * texArea;
 __device__ const int2 * texDg;
 
 int CUDA_grid_dim;
+int CUDA_warp_size = 32;
 double* pee, * pee0, * pWeight;
 bool nvml_enabled = false;
+
+/* A9: the wave size the device code was actually compiled for.  warpSize is a
+   device-side constant; on RDNA it is 32 by default but can be 64 in an
+   explicit wave64 build, which deviceProp.warpSize does not reveal. */
+__device__ int CUDA_WarpSizeCompiled;
+__global__ void CudaRecordWarpSize(void)
+{
+	CUDA_WarpSizeCompiled = (int)warpSize;
+}
 //bool if_freq_measured = false;
 
 //void GetPeakClock(const int cudadev)
@@ -173,6 +205,12 @@ int CUDAPrepare(int cudadev, double* beta_pole, double* lambda_pole, double* par
 	hipDeviceProp_t deviceProp;
 
 	hipGetDeviceProperties(&deviceProp, cudadev);
+	/* A9: use the wave size the kernels were compiled for, not the device's
+	   native/default wave size.  The two differ for explicit wave64 RDNA
+	   builds, where deviceProp.warpSize still reports 32. */
+	CudaRecordWarpSize <<<1, 1 >>> ();
+	ps_hip_ok(hipGetLastError(), "CudaRecordWarpSize launch");
+	ps_hip_ok(hipMemcpyFromSymbol(&CUDA_warp_size, HIP_SYMBOL(CUDA_WarpSizeCompiled), sizeof(int), 0, hipMemcpyDeviceToHost), "CUDA_WarpSizeCompiled");
 	if (!checkex)
 	{
 		auto cudaVersion = HIP_VERSION;
@@ -214,50 +252,45 @@ int CUDAPrepare(int cudadev, double* beta_pole, double* lambda_pole, double* par
 		fprintf(stderr, "Block dim: %d\n", CUDA_BLOCK_DIM);
 	}
 
-	hipError_t res;
-
 	//Global parameters
-	res = hipMemcpyToSymbol(HIP_SYMBOL(CUDA_beta_pole), beta_pole, sizeof(double) * (N_POLES + 1));
-	res = hipMemcpyToSymbol(HIP_SYMBOL(CUDA_lambda_pole), lambda_pole, sizeof(double) * (N_POLES + 1));
-	res = hipMemcpyToSymbol(HIP_SYMBOL(CUDA_par), par, sizeof(double) * 4);
-	res = hipMemcpyToSymbol(HIP_SYMBOL(CUDA_cl), &cl, sizeof(cl));
-	res = hipMemcpyToSymbol(HIP_SYMBOL(CUDA_Alamda_start), &Alamda_start, sizeof(Alamda_start));
-	res = hipMemcpyToSymbol(HIP_SYMBOL(CUDA_Alamda_incr), &Alamda_incr, sizeof(Alamda_incr));
-	res = hipMemcpyToSymbol(HIP_SYMBOL(CUDA_Mmax), &m_max, sizeof(m_max));
-	res = hipMemcpyToSymbol(HIP_SYMBOL(CUDA_Lmax), &l_max, sizeof(l_max));
-	res = hipMemcpyToSymbol(HIP_SYMBOL(CUDA_tim), tim, sizeof(double) * (MAX_N_OBS + 1));
-	res = hipMemcpyToSymbol(HIP_SYMBOL(CUDA_Phi_0), &Phi_0, sizeof(Phi_0));
+	ps_hip_ok(hipMemcpyToSymbol(HIP_SYMBOL(CUDA_beta_pole), beta_pole, sizeof(double) * (N_POLES + 1)), "CUDA_beta_pole");
+	ps_hip_ok(hipMemcpyToSymbol(HIP_SYMBOL(CUDA_lambda_pole), lambda_pole, sizeof(double) * (N_POLES + 1)), "CUDA_lambda_pole");
+	ps_hip_ok(hipMemcpyToSymbol(HIP_SYMBOL(CUDA_par), par, sizeof(double) * 4), "CUDA_par");
+	ps_hip_ok(hipMemcpyToSymbol(HIP_SYMBOL(CUDA_cl), &cl, sizeof(cl)), "CUDA_cl");
+	ps_hip_ok(hipMemcpyToSymbol(HIP_SYMBOL(CUDA_Alamda_start), &Alamda_start, sizeof(Alamda_start)), "CUDA_Alamda_start");
+	ps_hip_ok(hipMemcpyToSymbol(HIP_SYMBOL(CUDA_Alamda_incr), &Alamda_incr, sizeof(Alamda_incr)), "CUDA_Alamda_incr");
+	ps_hip_ok(hipMemcpyToSymbol(HIP_SYMBOL(CUDA_Mmax), &m_max, sizeof(m_max)), "CUDA_Mmax");
+	ps_hip_ok(hipMemcpyToSymbol(HIP_SYMBOL(CUDA_Lmax), &l_max, sizeof(l_max)), "CUDA_Lmax");
+	ps_hip_ok(hipMemcpyToSymbol(HIP_SYMBOL(CUDA_tim), tim, sizeof(double) * (MAX_N_OBS + 1)), "CUDA_tim");
+	ps_hip_ok(hipMemcpyToSymbol(HIP_SYMBOL(CUDA_Phi_0), &Phi_0, sizeof(Phi_0)), "CUDA_Phi_0");
 
-	res = hipMalloc(&pWeight, (ndata + 3 + 1) * sizeof(double));
-	res = hipMemcpy(pWeight, weight, (ndata + 3 + 1) * sizeof(double), hipMemcpyHostToDevice);
-	res = hipMemcpyToSymbol(HIP_SYMBOL(texWeight), &pWeight, sizeof(pWeight));
+	ps_hip_ok(hipMalloc(&pWeight, (ndata + 3 + 1) * sizeof(double)), "hipMalloc(pWeight)");
+	ps_hip_ok(hipMemcpy(pWeight, weight, (ndata + 3 + 1) * sizeof(double), hipMemcpyHostToDevice), "weight copy");
+	ps_hip_ok(hipMemcpyToSymbol(HIP_SYMBOL(texWeight), &pWeight, sizeof(pWeight)), "texWeight");
 
-	res = hipMalloc(&pee, (MAX_N_OBS + 1) * 3 * sizeof(double));
+	ps_hip_ok(hipMalloc(&pee, (MAX_N_OBS + 1) * 3 * sizeof(double)), "hipMalloc(pee)");
 	{
 		double* soa = (double*)malloc((size_t)(MAX_N_OBS + 1) * 3 * sizeof(double));
+		if (soa == NULL) { fprintf(stderr, "period_search: cannot allocate ee staging buffer\n"); fflush(stderr); exit(1); }
 		for (int ii = 0; ii <= ndata; ii++)
 			for (int cc = 0; cc < 3; cc++) soa[cc * (MAX_N_OBS + 1) + ii] = ee[ii][cc];
-		res = hipMemcpy(pee, soa, (MAX_N_OBS + 1) * 3 * sizeof(double), hipMemcpyHostToDevice);
+		ps_hip_ok(hipMemcpy(pee, soa, (MAX_N_OBS + 1) * 3 * sizeof(double), hipMemcpyHostToDevice), "ee copy");
 		free(soa);
 	}
-	res = hipMemcpyToSymbol(HIP_SYMBOL(CUDA_ee), &pee, sizeof(void*));
+	ps_hip_ok(hipMemcpyToSymbol(HIP_SYMBOL(CUDA_ee), &pee, sizeof(void*)), "CUDA_ee");
 
-	res = hipMalloc(&pee0, (MAX_N_OBS + 1) * 3 * sizeof(double));
+	ps_hip_ok(hipMalloc(&pee0, (MAX_N_OBS + 1) * 3 * sizeof(double)), "hipMalloc(pee0)");
 	{
 		double* soa = (double*)malloc((size_t)(MAX_N_OBS + 1) * 3 * sizeof(double));
+		if (soa == NULL) { fprintf(stderr, "period_search: cannot allocate ee0 staging buffer\n"); fflush(stderr); exit(1); }
 		for (int ii = 0; ii <= ndata; ii++)
 			for (int cc = 0; cc < 3; cc++) soa[cc * (MAX_N_OBS + 1) + ii] = ee0[ii][cc];
-		res = hipMemcpy(pee0, soa, (MAX_N_OBS + 1) * 3 * sizeof(double), hipMemcpyHostToDevice);
+		ps_hip_ok(hipMemcpy(pee0, soa, (MAX_N_OBS + 1) * 3 * sizeof(double), hipMemcpyHostToDevice), "ee0 copy");
 		free(soa);
 	}
-	res = hipMemcpyToSymbol(HIP_SYMBOL(CUDA_ee0), &pee0, sizeof(void*));
+	ps_hip_ok(hipMemcpyToSymbol(HIP_SYMBOL(CUDA_ee0), &pee0, sizeof(void*)), "CUDA_ee0");
 
-	if (res == hipSuccess)
-	{
-		return 1;
-	}
-
-	else return 0;
+	return 1;
 }
 
 void CUDAUnprepare(void)
@@ -265,6 +298,212 @@ void CUDAUnprepare(void)
 	hipFree(pee);
 	hipFree(pee0);
 	hipFree(pWeight);
+	/* A16: do not leave freed/dangling file-scope state behind if the process
+	   is ever reused for another device or workunit. */
+	pee = pee0 = pWeight = nullptr;
+	CUDA_grid_dim = 0;
+	CUDA_warp_size = 32;
+	nvml_enabled = false;
+}
+
+/* A11: the host-side device setup that CUDAPrecalc and CUDAStart used to carry
+   twice, verbatim.  The only real differences are the number of blocks, the
+   precalc flag and conw_r (a pointer in CUDAPrecalc, a value in CUDAStart). */
+struct ps_device_buffers
+{
+	void* pcc;
+	void* pfr;
+	void* pbrightness;
+	void* psig;
+	double* pa;
+	double* pal;
+	double* pco;
+	double* pdytemp;
+	double* pytemp;
+	double* pgf;
+	freq_result* res;
+	bool resPinned;
+	ps_device_buffers()
+		: pcc(nullptr), pfr(nullptr), pbrightness(nullptr), psig(nullptr),
+		  pa(nullptr), pal(nullptr), pco(nullptr), pdytemp(nullptr), pytemp(nullptr),
+		  pgf(nullptr), res(nullptr), resPinned(false) {}
+};
+
+static void ps_device_setup(int blocks, int isPrecalc, double conw_r,
+                            int* ia, int* ia_par, const double* cg_first, double* sig,
+                            double* brightness, int Numfac,
+                            int n_iter_max, int n_iter_min, int ndata,
+                            double iter_diff_max, ps_device_buffers& b)
+{
+	int m;
+	int isp = isPrecalc;
+
+	/* A11 follow-up: this loop was duplicated in both callers. */
+	for (int i = 1; i <= n_ph_par; i++)
+		ia[n_coef + 3 + i] = ia_par[i];
+
+	//here move data to device
+	ps_hip_ok(hipMemcpyToSymbol(HIP_SYMBOL(CUDA_Ncoef), &n_coef, sizeof(n_coef)), "CUDA_Ncoef");
+	ps_hip_ok(hipMemcpyToSymbol(HIP_SYMBOL(CUDA_Nphpar), &n_ph_par, sizeof(n_ph_par)), "CUDA_Nphpar");
+	ps_hip_ok(hipMemcpyToSymbol(HIP_SYMBOL(CUDA_Numfac), &Numfac, sizeof(Numfac)), "CUDA_Numfac");
+	m = Numfac + 1;
+	ps_hip_ok(hipMemcpyToSymbol(HIP_SYMBOL(CUDA_Numfac1), &m, sizeof(m)), "CUDA_Numfac1");
+	ps_hip_ok(hipMemcpyToSymbol(HIP_SYMBOL(CUDA_ia), ia, sizeof(int) * (MAX_N_PAR + 1)), "CUDA_ia");
+	ps_hip_ok(hipMemcpyToSymbol(HIP_SYMBOL(CUDA_cg_first), cg_first, sizeof(double) * (MAX_N_PAR + 1)), "CUDA_cg_first");
+	ps_hip_ok(hipMemcpyToSymbol(HIP_SYMBOL(CUDA_n_iter_max), &n_iter_max, sizeof(n_iter_max)), "CUDA_n_iter_max");
+	ps_hip_ok(hipMemcpyToSymbol(HIP_SYMBOL(CUDA_n_iter_min), &n_iter_min, sizeof(n_iter_min)), "CUDA_n_iter_min");
+	ps_hip_ok(hipMemcpyToSymbol(HIP_SYMBOL(CUDA_ndata), &ndata, sizeof(ndata)), "CUDA_ndata");
+	ps_hip_ok(hipMemcpyToSymbol(HIP_SYMBOL(CUDA_iter_diff_max), &iter_diff_max, sizeof(iter_diff_max)), "CUDA_iter_diff_max");
+	ps_hip_ok(hipMemcpyToSymbol(HIP_SYMBOL(CUDA_conw_r), &conw_r, sizeof(conw_r)), "CUDA_conw_r");
+	{
+		static double normalSoA[3][MAX_N_FAC + 1];
+		for (int nf_i = 0; nf_i <= MAX_N_FAC; nf_i++)
+			for (int nf_k = 0; nf_k < 3; nf_k++)
+				normalSoA[nf_k][nf_i] = normal[nf_i][nf_k];
+		ps_hip_ok(hipMemcpyToSymbol(HIP_SYMBOL(CUDA_Nor), normalSoA, sizeof(normalSoA)), "CUDA_Nor");
+	}
+	{
+		static float normalf[(MAX_N_FAC + 1) * 3];
+		for (int nf_i = 0; nf_i <= MAX_N_FAC; nf_i++)
+			for (int nf_k = 0; nf_k < 3; nf_k++)
+				normalf[nf_i * 3 + nf_k] = (float)normal[nf_i][nf_k];
+		ps_hip_ok(hipMemcpyToSymbol(HIP_SYMBOL(CUDA_Norf), normalf, sizeof(normalf)), "CUDA_Norf");
+	}
+	{
+		static double fcSoA[MAX_LM + 1][MAX_N_FAC + 1];
+		static double fsSoA[MAX_LM + 1][MAX_N_FAC + 1];
+		for (int i = 0; i <= MAX_N_FAC; i++)
+			for (int m = 0; m <= MAX_LM; m++) { fcSoA[m][i] = f_c[i][m]; fsSoA[m][i] = f_s[i][m]; }
+		ps_hip_ok(hipMemcpyToSymbol(HIP_SYMBOL(CUDA_Fc), fcSoA, sizeof(fcSoA)), "CUDA_Fc");
+		ps_hip_ok(hipMemcpyToSymbol(HIP_SYMBOL(CUDA_Fs), fsSoA, sizeof(fsSoA)), "CUDA_Fs");
+	}
+	{
+		static double plegSoA[MAX_LM + 1][MAX_LM + 1][MAX_N_FAC + 1];
+		for (int i = 0; i <= MAX_N_FAC; i++)
+			for (int l = 0; l <= MAX_LM; l++)
+				for (int m = 0; m <= MAX_LM; m++)
+					plegSoA[l][m][i] = pleg[i][l][m];
+		ps_hip_ok(hipMemcpyToSymbol(HIP_SYMBOL(CUDA_Pleg), plegSoA, sizeof(plegSoA)), "CUDA_Pleg");
+	}
+	ps_hip_ok(hipMemcpyToSymbol(HIP_SYMBOL(CUDA_Darea), d_area, sizeof(double) * (MAX_N_FAC + 1)), "CUDA_Darea");
+	ps_hip_ok(hipMemcpyToSymbol(HIP_SYMBOL(CUDA_Dsph), d_sphere, sizeof(double) * (MAX_N_FAC + 1) * (MAX_N_PAR + 1)), "CUDA_Dsph");
+	{
+		static float dsphf[(MAX_N_FAC + 1) * DSPHF_STRIDE];
+		for (int i = 0; i <= MAX_N_FAC; i++)
+			for (int k = 0; k <= MAX_N_PAR; k++)
+				dsphf[i * DSPHF_STRIDE + k] = (float)d_sphere[i][k];
+		ps_hip_ok(hipMemcpyToSymbol(HIP_SYMBOL(CUDA_DsphF), dsphf, sizeof(dsphf)), "CUDA_DsphF");
+	}
+	ps_hip_ok(hipMemcpyToSymbol(HIP_SYMBOL(CUDA_Is_Precalc), &isp, sizeof isp, 0, hipMemcpyHostToDevice), "CUDA_Is_Precalc");
+
+	ps_hip_ok(hipMalloc(&b.pbrightness, (ndata + 1) * sizeof(double)), "hipMalloc(pbrightness)");
+	ps_hip_ok(hipMemcpy(b.pbrightness, brightness, (ndata + 1) * sizeof(double), hipMemcpyHostToDevice), "brightness copy");
+	ps_hip_ok(hipMemcpyToSymbol(HIP_SYMBOL(texbrightness), &b.pbrightness, sizeof(b.pbrightness)), "texbrightness");
+
+	ps_hip_ok(hipMalloc(&b.psig, (ndata + 1) * sizeof(double)), "hipMalloc(psig)");
+	ps_hip_ok(hipMemcpy(b.psig, sig, (ndata + 1) * sizeof(double), hipMemcpyHostToDevice), "sig copy");
+	ps_hip_ok(hipMemcpyToSymbol(HIP_SYMBOL(texsig), &b.psig, sizeof(b.psig)), "texsig");
+
+	/* number of fitted parameters */
+	int lmfit = 0, llastma = 0, llastone = 1, ma = n_coef + 5 + n_ph_par;
+	for (m = 1; m <= ma; m++)
+	{
+		if (ia[m])
+		{
+			lmfit++;
+			llastma = m;
+		}
+	}
+	llastone = 1;
+	for (m = 2; m <= llastma; m++) //ia[1] is skipped because ia[1]=0 is acceptable inside mrqcof
+	{
+		if (!ia[m]) break;
+		llastone = m;
+	}
+	ps_hip_ok(hipMemcpyToSymbol(HIP_SYMBOL(CUDA_ma), &ma, sizeof(ma)), "CUDA_ma");
+	ps_hip_ok(hipMemcpyToSymbol(HIP_SYMBOL(CUDA_mfit), &lmfit, sizeof(lmfit)), "CUDA_mfit");
+	m = lmfit + 1;
+	ps_hip_ok(hipMemcpyToSymbol(HIP_SYMBOL(CUDA_mfit1), &m, sizeof(m)), "CUDA_mfit1");
+	ps_hip_ok(hipMemcpyToSymbol(HIP_SYMBOL(CUDA_lastma), &llastma, sizeof(llastma)), "CUDA_lastma");
+	ps_hip_ok(hipMemcpyToSymbol(HIP_SYMBOL(CUDA_lastone), &llastone, sizeof(llastone)), "CUDA_lastone");
+	m = ma - 2 - n_ph_par;
+	ps_hip_ok(hipMemcpyToSymbol(HIP_SYMBOL(CUDA_ncoef0), &m, sizeof(m)), "CUDA_ncoef0");
+
+	{
+		size_t freeB = 0, totalB = 0;
+		(void)hipMemGetInfo(&freeB, &totalB);
+		const size_t needB = (size_t)blocks * (sizeof(freq_context) + sizeof(freq_result)
+			+ 3 * (size_t)(Numfac + 1) * sizeof(double)
+			+ 2 * (size_t)(lmfit + 1) * (lmfit + 1) * sizeof(double)
+			+ (size_t)(max_l_points + 1) * (size_t)(ma + 1) * sizeof(double)
+			+ (size_t)(max_l_points + 1) * sizeof(double));
+		if (needB > freeB - freeB / 10)
+			fprintf(stderr, "period_search: WARNING need %.1f MB, only %.1f MB free\n",
+			        (double)needB / 1048576.0, (double)freeB / 1048576.0);
+	}
+
+	ps_hip_ok(hipMalloc(&b.pcc, blocks * sizeof(freq_context)), "hipMalloc(pcc)");
+	ps_hip_ok(hipMemcpyToSymbol(HIP_SYMBOL(CUDA_CC), &b.pcc, sizeof(b.pcc)), "CUDA_CC");
+	ps_hip_ok(hipMalloc(&b.pfr, blocks * sizeof(freq_result)), "hipMalloc(pfr)");
+	ps_hip_ok(hipMemcpyToSymbol(HIP_SYMBOL(CUDA_FR), &b.pfr, sizeof(b.pfr)), "CUDA_FR");
+
+	m = (Numfac + 1) * (n_coef + 1);
+	ps_hip_ok(hipMemcpyToSymbol(HIP_SYMBOL(CUDA_Dg_block), &m, sizeof(m)), "CUDA_Dg_block");
+
+	ps_hip_ok(hipMalloc(&b.pa, blocks * (Numfac + 1) * sizeof(double)), "hipMalloc(pa)");
+	ps_hip_ok(hipMemcpyToSymbol(HIP_SYMBOL(texArea), &b.pa, sizeof(b.pa)), "texArea");
+	ps_hip_ok(hipMalloc(&b.pal, blocks * (lmfit + 1) * (lmfit + 1) * sizeof(double)), "hipMalloc(pal)");
+	ps_hip_ok(hipMalloc(&b.pco, blocks * (lmfit + 1) * (lmfit + 1) * sizeof(double)), "hipMalloc(pco)");
+	ps_hip_ok(hipMalloc(&b.pdytemp, blocks * (max_l_points + 1) * (ma + 1) * sizeof(double)), "hipMalloc(pdytemp)");
+	ps_hip_ok(hipMalloc(&b.pytemp, blocks * (max_l_points + 1) * sizeof(double)), "hipMalloc(pytemp)");
+	ps_hip_ok(hipMalloc(&b.pgf, blocks * (Numfac + 1) * sizeof(double)), "hipMalloc(pgf)");
+
+	{
+		/* A12/B1: freq_context starts with exactly six pointer members then
+		   double cg[MAX_N_PAR+1] at offset 48.  Copy six pointers, not seven. */
+		void** hctx = (void**)malloc((size_t)blocks * 6 * sizeof(void*));
+		if (hctx == NULL) { fprintf(stderr, "period_search: cannot allocate struct staging array\n"); fflush(stderr); exit(1); }
+		for (m = 0; m < blocks; m++)
+		{
+			void** q = hctx + (size_t)m * 6;
+			q[0] = &b.pa[m * (Numfac + 1)];
+			q[1] = &b.pgf[m * (Numfac + 1)];
+			q[2] = &b.pal[m * (lmfit + 1) * (lmfit + 1)];
+			q[3] = &b.pco[m * (lmfit + 1) * (lmfit + 1)];
+			q[4] = &b.pdytemp[m * (max_l_points + 1) * (ma + 1)];
+			q[5] = &b.pytemp[m * (max_l_points + 1)];
+		}
+		ps_hip_ok(hipMemcpy2D((void*)b.pcc, sizeof(freq_context), hctx, 6 * sizeof(void*),
+		                      6 * sizeof(void*), blocks, hipMemcpyHostToDevice), "hipMemcpy2D(freq_context)");
+		free(hctx);
+	}
+
+	b.res = NULL;
+	b.resPinned = false;
+	hipError_t resErr = hipHostMalloc((void**)&b.res, blocks * sizeof(freq_result), hipHostMallocDefault);
+	if (resErr == hipSuccess && b.res != NULL)
+		b.resPinned = true;
+	else
+	{
+		b.res = (freq_result*)malloc(blocks * sizeof(freq_result));
+		if (b.res == NULL) { fprintf(stderr, "period_search: cannot allocate result buffer\n"); fflush(stderr); exit(1); }
+	}
+}
+
+static void ps_device_teardown(ps_device_buffers& b)
+{
+	hipFree(b.pa);
+	hipFree(b.pgf);
+	hipFree(b.pal);
+	hipFree(b.pco);
+	hipFree(b.pdytemp);
+	hipFree(b.pytemp);
+	hipFree(b.pcc);
+	hipFree(b.pfr);
+	hipFree(b.pbrightness);
+	hipFree(b.psig);
+	if (b.resPinned) hipHostFree(b.res); else free(b.res);
+	b = ps_device_buffers();
 }
 
 int CUDAPrecalc(int cudadev, double freq_start, double freq_end, double freq_step, double stop_condition, int n_iter_min, double* conw_r,
@@ -276,8 +515,6 @@ int CUDAPrecalc(int cudadev, double freq_start, double freq_end, double freq_ste
 	int i, n, m;
 	int n_iter_max;
 	double iter_diff_max;
-	freq_result* res;
-	void* pcc, * pfr, * pbrightness, * psig;
 
 	// NOTE: max_test_periods dictates the CUDA_Grid_dim_precalc value which is actual Threads-per-Block
 	/*	Cuda Compute profiler gives the following advice for almost every kernel launched:
@@ -305,14 +542,9 @@ int CUDAPrecalc(int cudadev, double freq_start, double freq_end, double freq_ste
 	//	fprintf(stderr, "freq_start (%.3f) - freq_end (%.3f) / freq_step (%.3f) = n_max (%d)\n", freq_start, freq_end, freq_step, n_max);
 	//#endif
 
-	for (i = 1; i <= n_ph_par; i++)
-	{
-		ia[n_coef + 3 + i] = ia_par[i];
-	}
-
 	n_iter_max = 0;
 	iter_diff_max = -1;
-	if (stop_condition > 1)
+	if (stop_condition >= 1)
 	{
 		n_iter_max = (int)stop_condition;
 		iter_diff_max = 0;
@@ -326,170 +558,29 @@ int CUDAPrecalc(int cudadev, double freq_start, double freq_end, double freq_ste
 
 	hipError_t err;
 	int isPrecalc = 1;
-	/*int i_col, sh_icol_local[CUDA_BLOCK_DIM], sh_irow_local[CUDA_BLOCK_DIM];
-	double piv_inv, sh_big_local[CUDA_BLOCK_DIM];*/
-
-	//here move data to device
-	hipMemcpyToSymbol(HIP_SYMBOL(CUDA_Ncoef), &n_coef, sizeof(n_coef));
-	hipMemcpyToSymbol(HIP_SYMBOL(CUDA_Nphpar), &n_ph_par, sizeof(n_ph_par));
-	hipMemcpyToSymbol(HIP_SYMBOL(CUDA_Numfac), &Numfac, sizeof(Numfac));
-	m = Numfac + 1;
-	hipMemcpyToSymbol(HIP_SYMBOL(CUDA_Numfac1), &m, sizeof(m));
-	hipMemcpyToSymbol(HIP_SYMBOL(CUDA_ia), ia, sizeof(int) * (MAX_N_PAR + 1));
-	hipMemcpyToSymbol(HIP_SYMBOL(CUDA_cg_first), cg_first, sizeof(double) * (MAX_N_PAR + 1));
-	hipMemcpyToSymbol(HIP_SYMBOL(CUDA_n_iter_max), &n_iter_max, sizeof(n_iter_max));
-	hipMemcpyToSymbol(HIP_SYMBOL(CUDA_n_iter_min), &n_iter_min, sizeof(n_iter_min));
-	hipMemcpyToSymbol(HIP_SYMBOL(CUDA_ndata), &ndata, sizeof(ndata));
-	hipMemcpyToSymbol(HIP_SYMBOL(CUDA_iter_diff_max), &iter_diff_max, sizeof(iter_diff_max));
-	hipMemcpyToSymbol(HIP_SYMBOL(CUDA_conw_r), conw_r, sizeof(conw_r));
-	{
-		static double normalSoA[3][MAX_N_FAC + 1];
-		for (int nf_i = 0; nf_i <= MAX_N_FAC; nf_i++)
-			for (int nf_k = 0; nf_k < 3; nf_k++)
-				normalSoA[nf_k][nf_i] = normal[nf_i][nf_k];
-		hipMemcpyToSymbol(HIP_SYMBOL(CUDA_Nor), normalSoA, sizeof(normalSoA));
-	}
-	{
-		static float normalf[(MAX_N_FAC + 1) * 3];
-		for (int nf_i = 0; nf_i <= MAX_N_FAC; nf_i++)
-			for (int nf_k = 0; nf_k < 3; nf_k++)
-				normalf[nf_i * 3 + nf_k] = (float)normal[nf_i][nf_k];
-		hipMemcpyToSymbol(HIP_SYMBOL(CUDA_Norf), normalf, sizeof(normalf));
-	}
-	{
-		static double fcSoA[MAX_LM + 1][MAX_N_FAC + 1];
-		static double fsSoA[MAX_LM + 1][MAX_N_FAC + 1];
-		for (int i = 0; i <= MAX_N_FAC; i++)
-			for (int m = 0; m <= MAX_LM; m++) { fcSoA[m][i] = f_c[i][m]; fsSoA[m][i] = f_s[i][m]; }
-		hipMemcpyToSymbol(HIP_SYMBOL(CUDA_Fc), fcSoA, sizeof(fcSoA));
-		hipMemcpyToSymbol(HIP_SYMBOL(CUDA_Fs), fsSoA, sizeof(fsSoA));
-	}
-	{
-		static double plegSoA[MAX_LM + 1][MAX_LM + 1][MAX_N_FAC + 1];
-		for (int i = 0; i <= MAX_N_FAC; i++)
-			for (int l = 0; l <= MAX_LM; l++)
-				for (int m = 0; m <= MAX_LM; m++)
-					plegSoA[l][m][i] = pleg[i][l][m];
-		hipMemcpyToSymbol(HIP_SYMBOL(CUDA_Pleg), plegSoA, sizeof(plegSoA));
-	}
-	hipMemcpyToSymbol(HIP_SYMBOL(CUDA_Darea), d_area, sizeof(double) * (MAX_N_FAC + 1));
-	hipMemcpyToSymbol(HIP_SYMBOL(CUDA_Dsph), d_sphere, sizeof(double) * (MAX_N_FAC + 1) * (MAX_N_PAR + 1));
-	{
-		static float dsphf[(MAX_N_FAC + 1) * DSPHF_STRIDE];
-		for (int i = 0; i <= MAX_N_FAC; i++)
-			for (int k = 0; k <= MAX_N_PAR; k++)
-				dsphf[i * DSPHF_STRIDE + k] = (float)d_sphere[i][k];
-		hipMemcpyToSymbol(HIP_SYMBOL(CUDA_DsphF), dsphf, sizeof(dsphf));
-	}
-	hipMemcpyToSymbol(HIP_SYMBOL(CUDA_Is_Precalc), &isPrecalc, sizeof isPrecalc, 0, hipMemcpyHostToDevice);
+	int CUDA_Grid_dim_precalc = max_test_periods * N_POLES;
+	ps_device_buffers dev;
+	ps_device_setup(CUDA_Grid_dim_precalc, isPrecalc, *conw_r, ia, ia_par, cg_first, sig, brightness, Numfac,
+	                n_iter_max, n_iter_min, ndata, iter_diff_max, dev);
+	freq_result* res = dev.res;
+	void* pfr = dev.pfr;
 	/*cudaMemcpyToSymbol(icol, &i_col, sizeof(i_col));
 	cudaMemcpyToSymbol(pivinv, &piv_inv, sizeof(piv_inv));
 	cudaMemcpyToSymbol(sh_icol, sh_icol_local, sizeof(int) * CUDA_BLOCK_DIM);
 	cudaMemcpyToSymbol(sh_irow, sh_irow_local, sizeof(int) * CUDA_BLOCK_DIM);
 	cudaMemcpyToSymbol(sh_big, sh_big_local, sizeof(double) * CUDA_BLOCK_DIM);*/
 
-	err = hipMalloc(&pbrightness, (ndata + 1) * sizeof(double));
-	err = hipMemcpy(pbrightness, brightness, (ndata + 1) * sizeof(double), hipMemcpyHostToDevice);
-	err = hipMemcpyToSymbol(HIP_SYMBOL(texbrightness), &pbrightness, sizeof(pbrightness));
-
-	err = hipMalloc(&psig, (ndata + 1) * sizeof(double));
-	err = hipMemcpy(psig, sig, (ndata + 1) * sizeof(double), hipMemcpyHostToDevice);
-	err = hipMemcpyToSymbol(HIP_SYMBOL(texsig), &psig, sizeof(psig));
-	if (err) printf("Error: %s\n", hipGetErrorString(err));
-
-	/* number of fitted parameters */
-	int lmfit = 0, llastma = 0, llastone = 1, ma = n_coef + 5 + n_ph_par;
-	for (m = 1; m <= ma; m++)
-	{
-		if (ia[m])
-		{
-			lmfit++;
-			llastma = m;
-		}
-	}
-	llastone = 1;
-	for (m = 2; m <= llastma; m++) //ia[1] is skipped because ia[1]=0 is acceptable inside mrqcof
-	{
-		if (!ia[m]) break;
-		llastone = m;
-	}
-	hipMemcpyToSymbol(HIP_SYMBOL(CUDA_ma), &ma, sizeof(ma));
-	hipMemcpyToSymbol(HIP_SYMBOL(CUDA_mfit), &lmfit, sizeof(lmfit));
-	m = lmfit + 1;
-	hipMemcpyToSymbol(HIP_SYMBOL(CUDA_mfit1), &m, sizeof(m));
-	hipMemcpyToSymbol(HIP_SYMBOL(CUDA_lastma), &llastma, sizeof(llastma));
-	hipMemcpyToSymbol(HIP_SYMBOL(CUDA_lastone), &llastone, sizeof(llastone));
-	m = ma - 2 - n_ph_par;
-	hipMemcpyToSymbol(HIP_SYMBOL(CUDA_ncoef0), &m, sizeof(m));
-
-	int CUDA_Grid_dim_precalc = max_test_periods * N_POLES;
-
-	{
-		size_t freeB = 0, totalB = 0;
-		(void)hipMemGetInfo(&freeB, &totalB);
-		const size_t needB = (size_t)CUDA_Grid_dim_precalc * (sizeof(freq_context) + sizeof(freq_result)
-			+ 3 * (size_t)(Numfac + 1) * sizeof(double)
-			+ 2 * (size_t)(lmfit + 1) * (lmfit + 1) * sizeof(double)
-			+ (size_t)(max_l_points + 1) * (size_t)(ma + 1) * sizeof(double)
-			+ (size_t)(max_l_points + 1) * sizeof(double));
-		if (needB > freeB - freeB / 10)
-			fprintf(stderr, "period_search: WARNING need %.1f MB, only %.1f MB free\n",
-			        (double)needB / 1048576.0, (double)freeB / 1048576.0);
-	}
-
-	err = hipMalloc(&pcc, CUDA_Grid_dim_precalc * sizeof(freq_context));
-	hipMemcpyToSymbol(HIP_SYMBOL(CUDA_CC), &pcc, sizeof(pcc));
-	err = hipMalloc(&pfr, CUDA_Grid_dim_precalc * sizeof(freq_result));
-	hipMemcpyToSymbol(HIP_SYMBOL(CUDA_FR), &pfr, sizeof(pfr));
-
-	m = (Numfac + 1) * (n_coef + 1);
-	hipMemcpyToSymbol(HIP_SYMBOL(CUDA_Dg_block), &m, sizeof(m));
-
-	double* pa, * pal, * pco, * pdytemp, * pytemp, * pgf;
-	float* paf;
-
-	err = hipMalloc(&pa, CUDA_Grid_dim_precalc * (Numfac + 1) * sizeof(double));
-	err = hipMemcpyToSymbol(HIP_SYMBOL(texArea), &pa, sizeof(pa));
-	err = hipMalloc(&pal, CUDA_Grid_dim_precalc * (lmfit + 1) * (lmfit + 1) * sizeof(double));
-	err = hipMalloc(&pco, CUDA_Grid_dim_precalc * (lmfit + 1) * (lmfit + 1) * sizeof(double));
-	err = hipMalloc(&pdytemp, CUDA_Grid_dim_precalc * (max_l_points + 1) * (ma + 1) * sizeof(double));
-	err = hipMalloc(&pytemp, CUDA_Grid_dim_precalc * (max_l_points + 1) * sizeof(double));
-	err = hipMalloc(&pgf, CUDA_Grid_dim_precalc * (Numfac + 1) * sizeof(double));
-	err = hipMalloc(&paf, CUDA_Grid_dim_precalc * (Numfac + 1) * sizeof(float));
-	if (err != hipSuccess) { fprintf(stderr, "period_search: device allocation failed: %s\n", hipGetErrorString(err)); exit(1); }
-
-	{
-		void** hctx = (void**)malloc((size_t)CUDA_Grid_dim_precalc * 7 * sizeof(void*));
-		for (m = 0; m < CUDA_Grid_dim_precalc; m++)
-		{
-			void** q = hctx + (size_t)m * 7;
-			q[0] = &pa[m * (Numfac + 1)];
-			q[1] = &pgf[m * (Numfac + 1)];
-			q[2] = &pal[m * (lmfit + 1) * (lmfit + 1)];
-			q[3] = &pco[m * (lmfit + 1) * (lmfit + 1)];
-			q[4] = &pdytemp[m * (max_l_points + 1) * (ma + 1)];
-			q[5] = &pytemp[m * (max_l_points + 1)];
-			q[6] = &paf[m * (Numfac + 1)];
-		}
-		err = hipMemcpy2D((void*)pcc, sizeof(freq_context), hctx, 7 * sizeof(void*),
-		                  7 * sizeof(void*), CUDA_Grid_dim_precalc, hipMemcpyHostToDevice);
-		free(hctx);
-	}
-
-	res = NULL;
-	err = hipHostMalloc((void**)&res, CUDA_Grid_dim_precalc * sizeof(freq_result), hipHostMallocDefault);
-	if (err != hipSuccess || res == NULL) res = (freq_result*)malloc(CUDA_Grid_dim_precalc * sizeof(freq_result));
 
 	for (n = 1; n <= max_test_periods; n += CUDA_Grid_dim_precalc)
 	{
 		CudaCalculatePreparePacked <<<CUDA_Grid_dim_precalc, 1 >>> (max_test_periods, freq_start, freq_step);
 		//err = cudaThreadSynchronize();
-		err = hipDeviceSynchronize();
+		ps_hip_ok(hipDeviceSynchronize(), "hipDeviceSynchronize");
 
 		{
 			//zero global End signal
 			theEnd = 0;
-			hipMemcpyToSymbol(HIP_SYMBOL(CUDA_End), &theEnd, sizeof(theEnd), 0, hipMemcpyHostToDevice);
+			ps_hip_ok(hipMemcpyToSymbol(HIP_SYMBOL(CUDA_End), &theEnd, sizeof(theEnd), 0, hipMemcpyHostToDevice), "CUDA_End");
 			//cudaGetSymbolAddress((void**)&endPtr, CUDA_End);
 			//
 			CudaCalculatePreparePolePacked <<<CUDA_Grid_dim_precalc, 1 >>> (max_test_periods);
@@ -502,6 +593,15 @@ int CUDAPrecalc(int cudadev, double freq_start, double freq_end, double freq_ste
 	while (!theEnd)
 			{
 				count++;
+				/* B6: a failed kernel launch never raises CUDA_End.  Abort
+				   instead of spinning forever.  The bound allows the configured
+				   minimum iteration count plus polling slack. */
+				if ((long long)count > ps_max_spin(n_iter_max, n_iter_min))
+				{
+					fprintf(stderr, "period_search: precalc did not terminate after %d iterations (kernel launch failure?)\n", count - 1);
+					fflush(stderr);
+					exit(1);
+				}
 				CudaCalculateIter1Begin <<<CUDA_Grid_dim_precalc, 1 >>> ();
 				//mrqcof
 								if (firstIter)
@@ -534,13 +634,19 @@ CudaCalculateIter1Mrqcof1Start <<<CUDA_Grid_dim_precalc, CUDA_BLOCK_DIM >>> ();
 				CudaCalculateIter2 <<<CUDA_Grid_dim_precalc, CUDA_BLOCK_DIM >>> ();
 				//err=cudaThreadSynchronize(); memcpy is synchro itself
 				err = hipMemcpyFromSymbol(&theEnd, HIP_SYMBOL(CUDA_End), sizeof theEnd, 0, hipMemcpyDeviceToHost);
+				if (err != hipSuccess)
+				{
+					fprintf(stderr, "period_search: precalc completion read failed: %s\n", hipGetErrorString(err));
+					fflush(stderr);
+					exit(1);
+				}
 				theEnd = theEnd == CUDA_Grid_dim_precalc;
 
 				//break;//debug
 			}
 			CudaCalculateFinishPole <<<CUDA_Grid_dim_precalc, CUDA_BLOCK_DIM >>> ();
 			//err = cudaThreadSynchronize();
-			err = hipDeviceSynchronize();
+			ps_hip_ok(hipDeviceSynchronize(), "hipDeviceSynchronize");
 			//			err=cudaMemcpyFromSymbol(&res,CUDA_FR,sizeof(freq_result)*CUDA_Grid_dim_precalc);
 			//			err=cudaMemcpyFromSymbol(&resc,CUDA_CC,sizeof(freq_context)*CUDA_Grid_dim_precalc);
 						//break; //debug
@@ -551,7 +657,7 @@ CudaCalculateIter1Mrqcof1Start <<<CUDA_Grid_dim_precalc, CUDA_BLOCK_DIM >>> ();
 		//err=cudaThreadSynchronize(); memcpy is synchro itself
 
 		//read results here
-		err = hipMemcpy(res, pfr, sizeof(freq_result) * CUDA_Grid_dim_precalc, hipMemcpyDeviceToHost);
+		ps_hip_ok(hipMemcpy(res, pfr, sizeof(freq_result) * CUDA_Grid_dim_precalc, hipMemcpyDeviceToHost), "result copy");
 
 		/* The unpacked precalc reuses the last pole's FR slots, which hold the
 		   best-dev pole across all poles for each period (strict <, earlier
@@ -574,21 +680,9 @@ CudaCalculateIter1Mrqcof1Start <<<CUDA_Grid_dim_precalc, CUDA_BLOCK_DIM >>> ();
 	} /* period loop */
 
 	isPrecalc = 0;
-	hipMemcpyToSymbol(HIP_SYMBOL(CUDA_Is_Precalc), &isPrecalc, sizeof(isPrecalc), 0, hipMemcpyHostToDevice);
+	ps_hip_ok(hipMemcpyToSymbol(HIP_SYMBOL(CUDA_Is_Precalc), &isPrecalc, sizeof(isPrecalc), 0, hipMemcpyHostToDevice), "CUDA_Is_Precalc");
 
-	hipFree(pa);
-	hipFree(paf);
-	hipFree(pgf);
-	hipFree(pal);
-	hipFree(pco);
-	hipFree(pdytemp);
-	hipFree(pytemp);
-	hipFree(pcc);
-	hipFree(pfr);
-	hipFree(pbrightness);
-	hipFree(psig);
-
-	hipHostFree(res);
+	ps_device_teardown(dev);
 
 	ave_dark_facet = sum_dark_facet / max_test_periods;
 
@@ -604,22 +698,20 @@ int CUDAStart(int cudadev, int n_start_from, double freq_start, double freq_end,
 	int ndata, int* ia, int* ia_par, double* cg_first, MFILE& mf, double escl, double* sig, int Numfac, double* brightness)
 {
 	int retval, i, n, m, iC, n_max = (int)((freq_start - freq_end) / freq_step) + 1;
+	/* H2: a corrupt/stale checkpoint can put n_start_from outside the sweep.
+	   Clamp it, and finish cleanly if there is nothing left to compute, so the
+	   block count cannot go negative or wrap. */
+	if (n_start_from < 1) n_start_from = 1;
+	if (n_start_from > n_max) return 1;
 	/* only the frequencies that will actually be launched need per-block storage */
 	const int allocBlocks = (n_max - n_start_from + 1 < CUDA_grid_dim) ? (n_max - n_start_from + 1) : CUDA_grid_dim;
 	int n_iter_max, theEnd, LinesWritten;
 	double iter_diff_max;
-	freq_result* res;
-	void* pcc, * pfr, * pbrightness, * psig;
 	char buf[256];
-
-	for (i = 1; i <= n_ph_par; i++)
-	{
-		ia[n_coef + 3 + i] = ia_par[i];
-	}
 
 	n_iter_max = 0;
 	iter_diff_max = -1;
-	if (stop_condition > 1)
+	if (stop_condition >= 1)
 	{
 		n_iter_max = (int)stop_condition;
 		iter_diff_max = 0;
@@ -632,62 +724,11 @@ int CUDAStart(int cudadev, int n_start_from, double freq_start, double freq_end,
 	}
 
 	hipError_t err;
-
-	/*int i_col, sh_icol_local[CUDA_BLOCK_DIM], sh_irow_local[CUDA_BLOCK_DIM];
-	double piv_inv, sh_big_local[CUDA_BLOCK_DIM];*/
-
-	//here move data to device
-	hipMemcpyToSymbol(HIP_SYMBOL(CUDA_Ncoef), &n_coef, sizeof(n_coef));
-	hipMemcpyToSymbol(HIP_SYMBOL(CUDA_Nphpar), &n_ph_par, sizeof(n_ph_par));
-	hipMemcpyToSymbol(HIP_SYMBOL(CUDA_Numfac), &Numfac, sizeof(Numfac));
-	m = Numfac + 1;
-	hipMemcpyToSymbol(HIP_SYMBOL(CUDA_Numfac1), &m, sizeof(m));
-	hipMemcpyToSymbol(HIP_SYMBOL(CUDA_ia), ia, sizeof(int) * (MAX_N_PAR + 1));
-	hipMemcpyToSymbol(HIP_SYMBOL(CUDA_cg_first), cg_first, sizeof(double) * (MAX_N_PAR + 1));
-	hipMemcpyToSymbol(HIP_SYMBOL(CUDA_n_iter_max), &n_iter_max, sizeof(n_iter_max));
-	hipMemcpyToSymbol(HIP_SYMBOL(CUDA_n_iter_min), &n_iter_min, sizeof(n_iter_min));
-	hipMemcpyToSymbol(HIP_SYMBOL(CUDA_ndata), &ndata, sizeof(ndata));
-	hipMemcpyToSymbol(HIP_SYMBOL(CUDA_iter_diff_max), &iter_diff_max, sizeof(iter_diff_max));
-	hipMemcpyToSymbol(HIP_SYMBOL(CUDA_conw_r), &conw_r, sizeof(conw_r));
-	{
-		static double normalSoA[3][MAX_N_FAC + 1];
-		for (int nf_i = 0; nf_i <= MAX_N_FAC; nf_i++)
-			for (int nf_k = 0; nf_k < 3; nf_k++)
-				normalSoA[nf_k][nf_i] = normal[nf_i][nf_k];
-		hipMemcpyToSymbol(HIP_SYMBOL(CUDA_Nor), normalSoA, sizeof(normalSoA));
-	}
-	{
-		static float normalf[(MAX_N_FAC + 1) * 3];
-		for (int nf_i = 0; nf_i <= MAX_N_FAC; nf_i++)
-			for (int nf_k = 0; nf_k < 3; nf_k++)
-				normalf[nf_i * 3 + nf_k] = (float)normal[nf_i][nf_k];
-		hipMemcpyToSymbol(HIP_SYMBOL(CUDA_Norf), normalf, sizeof(normalf));
-	}
-	{
-		static double fcSoA[MAX_LM + 1][MAX_N_FAC + 1];
-		static double fsSoA[MAX_LM + 1][MAX_N_FAC + 1];
-		for (int i = 0; i <= MAX_N_FAC; i++)
-			for (int m = 0; m <= MAX_LM; m++) { fcSoA[m][i] = f_c[i][m]; fsSoA[m][i] = f_s[i][m]; }
-		hipMemcpyToSymbol(HIP_SYMBOL(CUDA_Fc), fcSoA, sizeof(fcSoA));
-		hipMemcpyToSymbol(HIP_SYMBOL(CUDA_Fs), fsSoA, sizeof(fsSoA));
-	}
-	{
-		static double plegSoA[MAX_LM + 1][MAX_LM + 1][MAX_N_FAC + 1];
-		for (int i = 0; i <= MAX_N_FAC; i++)
-			for (int l = 0; l <= MAX_LM; l++)
-				for (int m = 0; m <= MAX_LM; m++)
-					plegSoA[l][m][i] = pleg[i][l][m];
-		hipMemcpyToSymbol(HIP_SYMBOL(CUDA_Pleg), plegSoA, sizeof(plegSoA));
-	}
-	hipMemcpyToSymbol(HIP_SYMBOL(CUDA_Darea), d_area, sizeof(double) * (MAX_N_FAC + 1));
-	hipMemcpyToSymbol(HIP_SYMBOL(CUDA_Dsph), d_sphere, sizeof(double) * (MAX_N_FAC + 1) * (MAX_N_PAR + 1));
-	{
-		static float dsphf[(MAX_N_FAC + 1) * DSPHF_STRIDE];
-		for (int i = 0; i <= MAX_N_FAC; i++)
-			for (int k = 0; k <= MAX_N_PAR; k++)
-				dsphf[i * DSPHF_STRIDE + k] = (float)d_sphere[i][k];
-		hipMemcpyToSymbol(HIP_SYMBOL(CUDA_DsphF), dsphf, sizeof(dsphf));
-	}
+	ps_device_buffers dev;
+	ps_device_setup(allocBlocks, 0, conw_r, ia, ia_par, cg_first, sig, brightness, Numfac,
+	                n_iter_max, n_iter_min, ndata, iter_diff_max, dev);
+	freq_result* res = dev.res;
+	void* pfr = dev.pfr;
 	/*cudaMemcpyToSymbol(icol, &i_col, sizeof(i_col));
 	cudaMemcpyToSymbol(pivinv, &piv_inv, sizeof(piv_inv));
 	cudaMemcpyToSymbol(sh_icol, sh_icol_local, sizeof(int) * CUDA_BLOCK_DIM);
@@ -695,95 +736,6 @@ int CUDAStart(int cudadev, int n_start_from, double freq_start, double freq_end,
 	cudaMemcpyToSymbol(sh_big, sh_big_local, sizeof(double) * CUDA_BLOCK_DIM);*/
 
 
-	err = hipMalloc(&pbrightness, (ndata + 1) * sizeof(double));
-	err = hipMemcpy(pbrightness, brightness, (ndata + 1) * sizeof(double), hipMemcpyHostToDevice);
-	err = hipMemcpyToSymbol(HIP_SYMBOL(texbrightness), &pbrightness, sizeof(pbrightness));
-
-	err = hipMalloc(&psig, (ndata + 1) * sizeof(double));
-	err = hipMemcpy(psig, sig, (ndata + 1) * sizeof(double), hipMemcpyHostToDevice);
-	err = hipMemcpyToSymbol(HIP_SYMBOL(texsig), &psig, sizeof(psig));
-	if (err) printf("Error: %s", hipGetErrorString(err));
-
-	/* number of fitted parameters */
-	int lmfit = 0, llastma = 0, llastone = 1, ma = n_coef + 5 + n_ph_par;
-	for (m = 1; m <= ma; m++)
-	{
-		if (ia[m])
-		{
-			lmfit++;
-			llastma = m;
-		}
-	}
-	llastone = 1;
-	for (m = 2; m <= llastma; m++) //ia[1] is skipped because ia[1]=0 is acceptable inside mrqcof
-	{
-		if (!ia[m]) break;
-		llastone = m;
-	}
-	hipMemcpyToSymbol(HIP_SYMBOL(CUDA_ma), &ma, sizeof(ma));
-	hipMemcpyToSymbol(HIP_SYMBOL(CUDA_mfit), &lmfit, sizeof(lmfit));
-	m = lmfit + 1;
-	hipMemcpyToSymbol(HIP_SYMBOL(CUDA_mfit1), &m, sizeof(m));
-	hipMemcpyToSymbol(HIP_SYMBOL(CUDA_lastma), &llastma, sizeof(llastma));
-	hipMemcpyToSymbol(HIP_SYMBOL(CUDA_lastone), &llastone, sizeof(llastone));
-	m = ma - 2 - n_ph_par;
-	hipMemcpyToSymbol(HIP_SYMBOL(CUDA_ncoef0), &m, sizeof(m));
-
-	{
-		size_t freeB = 0, totalB = 0;
-		(void)hipMemGetInfo(&freeB, &totalB);
-		const size_t needB = (size_t)allocBlocks * (sizeof(freq_context) + sizeof(freq_result)
-			+ 3 * (size_t)(Numfac + 1) * sizeof(double)
-			+ 2 * (size_t)(lmfit + 1) * (lmfit + 1) * sizeof(double)
-			+ (size_t)(max_l_points + 1) * (size_t)(ma + 1) * sizeof(double)
-			+ (size_t)(max_l_points + 1) * sizeof(double));
-		if (needB > freeB - freeB / 10)
-			fprintf(stderr, "period_search: WARNING need %.1f MB, only %.1f MB free\n",
-			        (double)needB / 1048576.0, (double)freeB / 1048576.0);
-	}
-
-	err = hipMalloc(&pcc, allocBlocks * sizeof(freq_context));
-	hipMemcpyToSymbol(HIP_SYMBOL(CUDA_CC), &pcc, sizeof(pcc));
-	err = hipMalloc(&pfr, allocBlocks * sizeof(freq_result));
-	hipMemcpyToSymbol(HIP_SYMBOL(CUDA_FR), &pfr, sizeof(pfr));
-
-	m = (Numfac + 1) * (n_coef + 1);
-	hipMemcpyToSymbol(HIP_SYMBOL(CUDA_Dg_block), &m, sizeof(m));
-
-	double* pa, * pal, * pco, * pdytemp, * pytemp, * pgf;
-	float* paf;
-
-	err = hipMalloc(&pa, allocBlocks * (Numfac + 1) * sizeof(double));
-	err = hipMemcpyToSymbol(HIP_SYMBOL(texArea), &pa, sizeof(pa));
-	err = hipMalloc(&pal, allocBlocks * (lmfit + 1) * (lmfit + 1) * sizeof(double));
-	err = hipMalloc(&pco, allocBlocks * (lmfit + 1) * (lmfit + 1) * sizeof(double));
-	err = hipMalloc(&pdytemp, allocBlocks * (max_l_points + 1) * (ma + 1) * sizeof(double));
-	err = hipMalloc(&pytemp, allocBlocks * (max_l_points + 1) * sizeof(double));
-	err = hipMalloc(&pgf, allocBlocks * (Numfac + 1) * sizeof(double));
-	err = hipMalloc(&paf, allocBlocks * (Numfac + 1) * sizeof(float));
-	if (err != hipSuccess) { fprintf(stderr, "period_search: device allocation failed: %s\n", hipGetErrorString(err)); exit(1); }
-
-	{
-		void** hctx = (void**)malloc((size_t)allocBlocks * 7 * sizeof(void*));
-		for (m = 0; m < allocBlocks; m++)
-		{
-			void** q = hctx + (size_t)m * 7;
-			q[0] = &pa[m * (Numfac + 1)];
-			q[1] = &pgf[m * (Numfac + 1)];
-			q[2] = &pal[m * (lmfit + 1) * (lmfit + 1)];
-			q[3] = &pco[m * (lmfit + 1) * (lmfit + 1)];
-			q[4] = &pdytemp[m * (max_l_points + 1) * (ma + 1)];
-			q[5] = &pytemp[m * (max_l_points + 1)];
-			q[6] = &paf[m * (Numfac + 1)];
-		}
-		err = hipMemcpy2D((void*)pcc, sizeof(freq_context), hctx, 7 * sizeof(void*),
-		                  7 * sizeof(void*), allocBlocks, hipMemcpyHostToDevice);
-		free(hctx);
-	}
-
-	res = NULL;
-	err = hipHostMalloc((void**)&res, allocBlocks * sizeof(freq_result), hipHostMallocDefault);
-	if (err != hipSuccess || res == NULL) res = (freq_result*)malloc(allocBlocks * sizeof(freq_result));
 
 	//int firstreport = 0;//beta debug
 	auto oldFractionDone = 0.0001;
@@ -810,12 +762,12 @@ int CUDAStart(int cudadev, int n_start_from, double freq_start, double freq_end,
 
 		CudaCalculatePrepare <<<grid, 1 >>> (n, n_max, freq_start, freq_step);
 		//err = cudaThreadSynchronize();
-		err = hipDeviceSynchronize();
+		ps_hip_ok(hipDeviceSynchronize(), "hipDeviceSynchronize");
 
 		for (m = 1; m <= N_POLES; m++)
 		{
 			auto mid = (double(fractionDone) - double(oldFractionDone));
-			auto inner = (double(mid) / double(N_POLES) * (double(m - 1)));
+			auto inner = (double(mid) / double(N_POLES) * (double(m)));
 			//printf("mid: %.4f, inner: %.4f\n", mid, inner);
 			auto fractionDone2 = oldFractionDone + inner;
 			boinc_fraction_done(fractionDone2);
@@ -831,7 +783,7 @@ int CUDAStart(int cudadev, int n_start_from, double freq_start, double freq_end,
 #endif
 			//zero global End signal
 			theEnd = 0;
-			hipMemcpyToSymbol(HIP_SYMBOL(CUDA_End), &theEnd, sizeof(theEnd));
+			ps_hip_ok(hipMemcpyToSymbol(HIP_SYMBOL(CUDA_End), &theEnd, sizeof(theEnd)), "CUDA_End");
 			//
 			CudaCalculatePreparePole <<<grid, 1 >>> (m);
 			//
@@ -840,6 +792,13 @@ int CUDAStart(int cudadev, int n_start_from, double freq_start, double freq_end,
 	while (!theEnd)
 			{
 				count++;
+				/* B6: bound the spin; see CUDAPrecalc. */
+				if ((long long)count > ps_max_spin(n_iter_max, n_iter_min))
+				{
+					fprintf(stderr, "period_search: solve did not terminate after %d iterations (kernel launch failure?)\n", count - 1);
+					fflush(stderr);
+					exit(1);
+				}
 				CudaCalculateIter1Begin <<<grid, 1 >>> ();
 				//mrqcof
 								if (firstIter)
@@ -883,6 +842,12 @@ CudaCalculateIter1Mrqcof1Start <<<grid, CUDA_BLOCK_DIM >>> ();
 				if ((count % 5) == 0)
 				{
 					err = hipMemcpyFromSymbol(&theEnd, HIP_SYMBOL(CUDA_End), sizeof theEnd, 0, hipMemcpyDeviceToHost);
+					if (err != hipSuccess)
+					{
+						fprintf(stderr, "period_search: solve completion read failed: %s\n", hipGetErrorString(err));
+						fflush(stderr);
+						exit(1);
+					}
 					theEnd = theEnd == grid;
 				}
 
@@ -890,7 +855,7 @@ CudaCalculateIter1Mrqcof1Start <<<grid, CUDA_BLOCK_DIM >>> ();
 			}
 			CudaCalculateFinishPole <<<grid, CUDA_BLOCK_DIM >>> ();
 			//err = cudaThreadSynchronize();
-			err = hipDeviceSynchronize();
+			ps_hip_ok(hipDeviceSynchronize(), "hipDeviceSynchronize");
 			//			err=cudaMemcpyFromSymbol(&res,CUDA_FR,sizeof(freq_result)*grid);
 			//			err=cudaMemcpyFromSymbol(&resc,CUDA_CC,sizeof(freq_context)*grid);
 						//break; //debug
@@ -900,7 +865,7 @@ CudaCalculateIter1Mrqcof1Start <<<grid, CUDA_BLOCK_DIM >>> ();
 		//err=cudaThreadSynchronize(); memcpy is synchro itself
 
 		//read results here
-		err = hipMemcpy(res, pfr, sizeof(freq_result) * grid, hipMemcpyDeviceToHost);
+		ps_hip_ok(hipMemcpy(res, pfr, sizeof(freq_result) * grid, hipMemcpyDeviceToHost), "result copy");
 
 		oldFractionDone = fractionDone;
 		LinesWritten = 0;
@@ -930,19 +895,7 @@ CudaCalculateIter1Mrqcof1Start <<<grid, CUDA_BLOCK_DIM >>> ();
 		//		break;//debug
 	} /* period loop */
 
-	hipFree(pa);
-	hipFree(paf);
-	hipFree(pgf);
-	hipFree(pal);
-	hipFree(pco);
-	hipFree(pdytemp);
-	hipFree(pytemp);
-	hipFree(pcc);
-	hipFree(pfr);
-	hipFree(pbrightness);
-	hipFree(psig);
-
-	hipHostFree(res);
+	ps_device_teardown(dev);
 
 	//nvmlShutdown();
 

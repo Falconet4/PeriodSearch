@@ -5,7 +5,7 @@
 
 extern int l_max, m_max, n_iter, last_call,
            n_coef, num_fac, l_curves, n_ph_par,
-           l_points[MAX_LC+1], in_rel[MAX_LC+1],
+           l_points[MAX_LC+2], in_rel[MAX_LC+2],
 		   deallocate, max_l_points;
 
 extern double o_chi_square, chi_square, a_lambda, a_lamda_incr, a_lamda_start, phi_0, scale,
@@ -17,4 +17,4 @@ extern double o_chi_square, chi_square, a_lambda, a_lamda_incr, a_lamda_start, p
               normal[MAX_N_FAC+1][3], bl_matrix[4][4],
               pleg[MAX_N_FAC+1][MAX_LM+1][MAX_LM+1],
               d_bl_matrix[3][4][4],
-			  weight[MAX_N_OBS+1];
+			  weight[MAX_N_OBS+4];
